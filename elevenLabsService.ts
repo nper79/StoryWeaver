@@ -1,0 +1,103 @@
+
+import type { ElevenLabsVoice } from './types';
+
+const BASE_URL = 'https://api.elevenlabs.io/v1';
+
+async function handleElevenLabsError(response: Response, serviceName: string): Promise<Error> {
+  const status = response.status;
+  let errorDetail = response.statusText || "Unknown error";
+
+  try {
+    const responseText = await response.text();
+    if (responseText) {
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorDetail = errorJson.detail?.message || errorJson.message || errorJson.error?.message || responseText;
+      } catch (e) {
+        // Not JSON, use raw text if it's more informative than statusText
+        errorDetail = responseText.substring(0, 200); // Limit length
+      }
+    }
+  } catch (e) {
+    // Failed to get response body
+  }
+  
+  console.error(`ElevenLabs API Error ${status}: ${serviceName} - ${errorDetail}`);
+  return new Error(`${serviceName} failed: ${errorDetail} (Status: ${status})`);
+}
+
+export async function fetchAvailableElevenLabsVoices(apiKey: string | null): Promise<ElevenLabsVoice[]> {
+  const serviceName = "Fetch ElevenLabs Voices";
+  console.log(`${serviceName}: Starting with API key ${apiKey ? 'provided' : 'not provided'}`); 
+  if (apiKey) {
+    console.log(`${serviceName}: API key length: ${apiKey.length}`);
+    console.log(`${serviceName}: API key starts with: ${apiKey.substring(0, 5)}`);
+    console.log(`${serviceName}: API key ends with: ${apiKey.substring(apiKey.length - 5)}`);
+  } else {
+    console.warn(`${serviceName}: API key is not provided. Voice features will be disabled.`);
+    return []; 
+  }
+  try {
+    console.log(`${serviceName}: Making API request to ${BASE_URL}/voices`);
+    const headers = { 'xi-api-key': apiKey };
+    console.log(`${serviceName}: Request headers:`, headers);
+    
+    const response = await fetch(`${BASE_URL}/voices`, {
+      headers: headers,
+    });
+    
+    console.log(`${serviceName}: Response status:`, response.status, response.statusText);
+    if (!response.ok) {
+      console.error(`${serviceName}: Response not OK:`, response.status, response.statusText);
+      throw await handleElevenLabsError(response, serviceName);
+    }
+    const data = await response.json();
+    return data.voices.map((voice: any) => ({ 
+        voice_id: voice.voice_id,
+        name: voice.name,
+        category: voice.category,
+        labels: voice.labels,
+    })) as ElevenLabsVoice[];
+  } catch (error) {
+    console.error(`${serviceName} Error:`, error);
+    if (error instanceof Error) throw error;
+    throw new Error(`An unknown error occurred while ${serviceName}.`);
+  }
+}
+
+export async function generateSpeech(apiKey: string | null, voiceId: string, text: string): Promise<Blob> {
+  const serviceName = "Generate Speech";
+  if (!apiKey) {
+    console.error(`${serviceName}: API key is not provided.`);
+    throw new Error('ElevenLabs API key is not provided for speech generation.');
+  }
+  try {
+    const response = await fetch(`${BASE_URL}/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'xi-api-key': apiKey,
+        'Accept': 'audio/mpeg',
+      },
+      body: JSON.stringify({
+        text: text,
+        model_id: 'eleven_multilingual_v2', 
+        voice_settings: {
+          stability: 0.6,
+          similarity_boost: 0.8,
+          style: 0.4, 
+          use_speaker_boost: true,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw await handleElevenLabsError(response, serviceName);
+    }
+    return response.blob();
+  } catch (error) {
+    console.error(`${serviceName} Error:`, error);
+    if (error instanceof Error) throw error;
+    throw new Error(`An unknown error occurred while ${serviceName}.`);
+  }
+}

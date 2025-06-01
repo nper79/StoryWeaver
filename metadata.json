@@ -1,0 +1,6 @@
+{
+  "name": "Interactive Story Weaver",
+  "description": "A web application to visually create interactive stories by connecting scene blocks. Users can define scenes, write content, and establish choices linking them, similar to Twine. The story can be saved to and loaded from a JSON file.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}

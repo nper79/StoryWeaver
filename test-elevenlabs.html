@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple ElevenLabs API Test</title>
+</head>
+<body>
+  <h1>ElevenLabs API Key Test</h1>
+  <input type="text" id="apiKey" placeholder="Enter ElevenLabs API key" style="width: 400px;">
+  <button onclick="testKey()">Test API Key</button>
+  <div id="result" style="margin-top: 20px; white-space: pre-wrap;"></div>
+
+  <script>
+    function testKey() {
+      const key = document.getElementById('apiKey').value.trim();
+      const resultDiv = document.getElementById('result');
+      
+      if (!key) {
+        resultDiv.innerHTML = 'Please enter an API key';
+        return;
+      }
+      
+      resultDiv.innerHTML = 'Testing...';
+      
+      fetch('https://api.elevenlabs.io/v1/voices', {
+        method: 'GET',
+        headers: {
+          'xi-api-key': key,
+          'Accept': 'application/json'
+        }
+      })
+      .then(response => {
+        return response.text().then(text => {
+          return {
+            status: response.status,
+            text: text
+          };
+        });
+      })
+      .then(data => {
+        if (data.status === 200) {
+          resultDiv.innerHTML = `SUCCESS (${data.status}): ${data.text}`;
+        } else {
+          resultDiv.innerHTML = `ERROR (${data.status}): ${data.text}`;
+        }
+      })
+      .catch(error => {
+        resultDiv.innerHTML = `FETCH ERROR: ${error.message}`;
+      });
+    }
+  </script>
+</body>
+</html>
