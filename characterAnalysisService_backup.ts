@@ -1,4 +1,5 @@
 import type { Scene, VoiceAssignment } from './types';
+import { getImageFromStorage } from './fileStorageService';
 
 export interface CharacterDetectionResult {
   detectedCharacters: string[];
@@ -85,7 +86,11 @@ export function extractSettingFromScene(sceneContent: string): string {
 /**
  * Builds context from previous scenes in the story
  */
-export function buildContextFromPreviousScenes(): string {
+export function buildContextFromPreviousScenes(
+  currentSceneId: string,
+  allScenes: Scene[],
+  connections: any[]
+): string {
   // Simple implementation - just return empty for now
   // Could be enhanced to trace back through connected scenes
   return '';
@@ -102,66 +107,41 @@ export async function generateSimpleImagePrompt(
   
   console.log(`[CharacterAnalysis] Generating simple prompt for scene:`, scene.title);
   console.log(`[CharacterAnalysis] Detected characters:`, detectedCharacters);
-  console.log(`[CharacterAnalysis] Setting context:`, settingContext);
   
-  // Clean up the setting context to extract just the location
-  let location = "a location";
-  if (settingContext) {
-    const content = settingContext.toLowerCase();
-    if (content.includes('madrid')) {
-      location = "Madrid, Spain";
-    } else if (content.includes('cafe') || content.includes('coffee')) {
-      location = "a café";
-    } else if (content.includes('street')) {
-      location = "the street";
-    } else if (content.includes('restaurant')) {
-      location = "a restaurant";
-    } else if (content.includes('park')) {
-      location = "a park";
-    } else if (content.includes('home') || content.includes('house')) {
-      location = "at home";
-    } else {
-      // Try to extract a clean location name
-      const match = content.match(/(?:in|at)\s+([^,.\n]+)/);
-      if (match) {
-        location = match[1].trim();
-      }
-    }
-  }
-  
-  // Create clean, simple prompt
+  // Create ultra-simple, objective prompt
   let prompt = "";
   
   if (detectedCharacters.length === 0) {
-    prompt = `Anime style scene in ${location}`;
+    // No characters - just describe the setting
+    prompt = `Anime style scene in ${settingContext || 'a location'}`;
   } else if (detectedCharacters.length === 1) {
-    prompt = `This character in ${location}`;
+    // Single character
+    prompt = `This character in ${settingContext || 'a location'}`;
   } else {
-    prompt = `These ${detectedCharacters.length} characters in ${location}`;
+    // Multiple characters  
+    prompt = `These ${detectedCharacters.length} characters in ${settingContext || 'a location'}`;
   }
   
   // Add simple action based on scene content
   const content = scene.content.toLowerCase();
   if (content.includes('smiling') || content.includes('happy')) {
-    prompt += ", smiling";
-  } else if (content.includes('talking') || content.includes('conversation') || content.includes('como estas')) {
-    prompt += ", talking";
+    prompt += ', smiling';
+  } else if (content.includes('talking') || content.includes('conversation')) {
+    prompt += ', talking';
   } else if (content.includes('walking')) {
-    prompt += ", walking";
+    prompt += ', walking';
   } else if (content.includes('sitting')) {
-    prompt += ", sitting";
+    prompt += ', sitting';
   } else if (content.includes('looking')) {
-    prompt += ", looking around";
-  } else if (content.includes('met') || content.includes('meeting')) {
-    prompt += ", meeting";
+    prompt += ', looking around';
   }
   
-  console.log(`[CharacterAnalysis] Generated clean prompt:`, prompt);
+  console.log(`[CharacterAnalysis] Generated simple prompt:`, prompt);
   
   return {
     prompt,
     charactersInScene: detectedCharacters,
-    settingUsed: location
+    settingUsed: settingContext
   };
 }
 
@@ -170,6 +150,8 @@ export async function generateSimpleImagePrompt(
  */
 export function analyzeScene(
   scene: Scene,
+  allScenes: Scene[],
+  connections: any[],
   voiceAssignments: VoiceAssignment[]
 ): CharacterDetectionResult {
   
@@ -181,7 +163,7 @@ export function analyzeScene(
   
   // If no setting found in current scene, look at previous scenes
   if (!settingContext) {
-    settingContext = buildContextFromPreviousScenes();
+    settingContext = buildContextFromPreviousScenes(scene.id, allScenes, connections);
   }
   
   return {

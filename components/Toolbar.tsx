@@ -1,11 +1,12 @@
-
 import React, { useRef } from 'react';
 import type { StoryData } from '../types';
 
 interface ToolbarProps {
   onAddScene: () => void;
   onSave: () => void;
+  onExportZip: () => Promise<void>;
   onLoad: (data: StoryData) => void;
+  onImportZip: (file: File) => Promise<void>;
   onSetStartScene: () => void;
   isStartSceneSet: boolean; // True if the currently selectedSceneId is the start scene
   selectedSceneId: string | null; // The ID of the currently selected scene (for 'Set Start' button)
@@ -18,16 +19,19 @@ interface ToolbarProps {
 const Toolbar: React.FC<ToolbarProps> = ({ 
   onAddScene, 
   onSave, 
+  onExportZip, 
   onLoad, 
+  onImportZip, 
   onSetStartScene, 
   isStartSceneSet, 
   selectedSceneId,
   onOrganizeFlow,
   onPlayStory,
   canPlayStory,
-  onOpenSettings, // Changed from onOpenVoiceSettings
+  onOpenSettings, 
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -53,13 +57,29 @@ const Toolbar: React.FC<ToolbarProps> = ({
     }
   };
 
+  const handleZipFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      onImportZip(file);
+      if(zipInputRef.current) { 
+        zipInputRef.current.value = "";
+      }
+    }
+  };
+
   const triggerFileInput = () => {
     fileInputRef.current?.click();
+  };
+
+  const triggerZipInput = () => {
+    zipInputRef.current?.click();
   };
 
   const commonButtonClass = "px-4 py-2 rounded-md text-sm font-medium transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-opacity-50 flex items-center space-x-2";
   const primaryButtonClass = `${commonButtonClass} bg-sky-500 hover:bg-sky-600 text-white focus:ring-sky-400`;
   const secondaryButtonClass = `${commonButtonClass} bg-slate-600 hover:bg-slate-500 text-slate-100 focus:ring-slate-400`;
+  const exportButtonClass = `${commonButtonClass} bg-purple-600 hover:bg-purple-700 text-white focus:ring-purple-400`;
+  const importButtonClass = `${commonButtonClass} bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-400`;
   
   const startSceneButtonClass = selectedSceneId 
     ? (isStartSceneSet ? `${commonButtonClass} bg-emerald-600 hover:bg-emerald-700 text-white focus:ring-emerald-500` : `${commonButtonClass} bg-yellow-500 hover:bg-yellow-600 text-white focus:ring-yellow-400`) 
@@ -109,17 +129,56 @@ const Toolbar: React.FC<ToolbarProps> = ({
       >
         {isStartSceneSet ? "Start Scene ✓" : "Set Start"}
       </button>
-      <button onClick={onSave} className={secondaryButtonClass}>
-        Save Story
-      </button>
-      <button onClick={triggerFileInput} className={secondaryButtonClass}>
-        Load Story
-      </button>
+      
+      {/* Export/Import Section */}
+      <div className="border-l border-slate-600 pl-3 flex items-center space-x-3">
+        <button 
+          onClick={onExportZip} 
+          className={exportButtonClass}
+          title="Export story with all images and audio as ZIP file"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+            <path fillRule="evenodd" d="M10 2a.75.75 0 01.75.75v5.59l1.95-2.1a.75.75 0 111.1 1.02l-3.25 3.5a.75.75 0 01-1.1 0L6.2 7.26a.75.75 0 111.1-1.02l1.95 2.1V2.75A.75.75 0 0110 2z" clipRule="evenodd" />
+            <path fillRule="evenodd" d="M5.404 14.596A6.5 6.5 0 1115.596 5.404 6.5 6.5 0 015.404 14.596zM4.25 18a.75.75 0 01-.75-.75v-8.5a.75.75 0 011.5 0v7.75h11.5v-7.75a.75.75 0 011.5 0v8.5a.75.75 0 01-.75.75H4.25z" clipRule="evenodd" />
+          </svg>
+          <span>Export ZIP</span>
+        </button>
+        
+        <button 
+          onClick={triggerZipInput} 
+          className={importButtonClass}
+          title="Import story from ZIP file with all assets"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+            <path fillRule="evenodd" d="M10 18a.75.75 0 01-.75-.75v-5.59l-1.95 2.1a.75.75 0 11-1.1-1.02l3.25-3.5a.75.75 0 011.1 0l3.25 3.5a.75.75 0 11-1.1 1.02l-1.95-2.1v5.59A.75.75 0 0110 18z" clipRule="evenodd" />
+            <path fillRule="evenodd" d="M14.596 5.404A6.5 6.5 0 015.404 14.596 6.5 6.5 0 0114.596 5.404zM15.75 2a.75.75 0 01.75.75v8.5a.75.75 0 01-1.5 0V3.5H3.5v7.75a.75.75 0 01-1.5 0V2.75A.75.75 0 012.75 2h13z" clipRule="evenodd" />
+          </svg>
+          <span>Import ZIP</span>
+        </button>
+      </div>
+      
+      {/* Legacy JSON Import/Export */}
+      <div className="border-l border-slate-600 pl-3 flex items-center space-x-3">
+        <button onClick={onSave} className={secondaryButtonClass}>
+          Save Story
+        </button>
+        <button onClick={triggerFileInput} className={secondaryButtonClass}>
+          Load Story
+        </button>
+      </div>
+      
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
         accept=".json"
+        className="hidden"
+      />
+      <input
+        type="file"
+        ref={zipInputRef}
+        onChange={handleZipFileChange}
+        accept=".zip"
         className="hidden"
       />
     </div>

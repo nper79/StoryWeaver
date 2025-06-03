@@ -53,17 +53,25 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
 
   useEffect(() => {
     const loadStoredImage = async () => {
+      console.log(`[SceneBlock] Loading image for scene ${scene.title}, generatedImageId:`, scene.generatedImageId);
       if (scene.generatedImageId) {
         setImageLoading(true);
-        const imageData = await getImageFromStorage(scene.generatedImageId);
-        setStoredImage(imageData);
+        try {
+          const imageData = await getImageFromStorage(scene.generatedImageId);
+          console.log(`[SceneBlock] Image loaded for ${scene.title}:`, imageData ? 'SUCCESS' : 'FAILED');
+          setStoredImage(imageData);
+        } catch (error) {
+          console.error(`[SceneBlock] Error loading image for ${scene.title}:`, error);
+          setStoredImage(null);
+        }
         setImageLoading(false);
       } else {
+        console.log(`[SceneBlock] No generatedImageId for scene ${scene.title}`);
         setStoredImage(null);
       }
     };
     loadStoredImage();
-  }, [scene.generatedImageId]);
+  }, [scene.generatedImageId, scene.title]);
 
   const handleTitleSave = (newTitle: string) => {
     onUpdate(scene.id, { title: newTitle });

@@ -26,11 +26,17 @@ import {
 } from './constants';
 import { 
   analyzeScene, 
-  generateEnhancedImagePrompt, 
+  generateSimpleImagePrompt, 
   type CharacterDetectionResult 
 } from './characterAnalysisService';
-import { generateSceneImage } from './imageGenerationService';
+import { 
+  enhancePromptWithLocationConsistency,
+  extractLocationKey,
+  updateStoryWithLocationKeys
+} from './locationConsistencyService';
+import { generateSceneImageWithCharacterReferences } from './imageGenerationService';
 import { saveGeneratedImage, saveCharacterImage } from './fileStorageService';
+import { exportStoryToZip, importStoryFromZip } from './backupService';
 
 const generateId = (): string => Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
 const STORY_DATA_LOCAL_STORAGE_KEY = 'interactiveStoryData';
@@ -394,6 +400,28 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleExportZip = async () => {
+    try {
+      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
+      await exportStoryToZip(storyData);
+      alert('Story exported successfully as ZIP file!');
+    } catch (error) {
+      console.error('Failed to export story:', error);
+      alert('Failed to export story. Please try again.');
+    }
+  };
+
+  const handleImportZip = async (file: File) => {
+    try {
+      const importedStoryData = await importStoryFromZip(file);
+      handleLoad(importedStoryData);
+      alert('Story imported successfully from ZIP file!');
+    } catch (error) {
+      console.error('Failed to import story:', error);
+      alert('Failed to import story. Please check the file and try again.');
+    }
+  };
+
   const handleLoad = (data: StoryData) => {
     setScenes(data.scenes?.map(s => ({
       ...s, 
@@ -468,7 +496,7 @@ const App: React.FC = () => {
     setScenes(prev => [...prev, ...newScenesToAdd]);
     setConnections(prev => [...prev, ...newConnectionsToAdd]);
   }, [scenes]);
-  
+
   const handleAddThreeOptions = useCallback((sourceSceneId: string) => {
     handleAddMultipleOptions(sourceSceneId, 3);
   }, [handleAddMultipleOptions]);
@@ -631,7 +659,7 @@ const App: React.FC = () => {
         
         try {
           // Step 1: Analyze the scene for characters and context
-          const analysisResult = analyzeScene(scene, scenes, connections, voiceAssignments);
+          const analysisResult = analyzeScene(scene, voiceAssignments);
           detectionResults.push(analysisResult);
           
           // Update scene with detected characters and setting context
@@ -646,58 +674,19 @@ const App: React.FC = () => {
             setting: analysisResult.settingContext
           });
           
-          // Step 2: Generate enhanced image prompt using character descriptions
-          if (analysisResult.detectedCharacters.length > 0 || analysisResult.settingContext) {
-            const enhancedResult = await generateEnhancedImagePrompt(
-              scene,
-              analysisResult.detectedCharacters,
-              analysisResult.settingContext,
-              voiceAssignments,
-              openaiApiKey
-            );
-            
-            updatedScenes[i] = {
-              ...updatedScenes[i],
-              generatedImagePrompt: enhancedResult.prompt
-            };
-            
-            console.log(`[App] Enhanced prompt for scene ${scene.title}: ${enhancedResult.prompt.substring(0, 100)}...`);
-          } else {
-            // Fallback to basic prompt generation for scenes without characters or setting
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${openaiApiKey}`
-              },
-              body: JSON.stringify({
-                model: 'gpt-4',
-                messages: [
-                  {
-                    role: 'system',
-                    content: 'You are an expert at creating detailed image generation prompts. Create a vivid, descriptive prompt for an image that would illustrate the following scene from an interactive story. Focus on the visual elements, mood, and setting. The prompt should be 1-3 sentences and highly detailed for best results with image generation models. IMPORTANT: The image must be in anime style - this is mandatory.'
-                  },
-                  {
-                    role: 'user',
-                    content: `Scene Title: ${scene.title}\n\nScene Content: ${scene.content}`
-                  }
-                ],
-                max_tokens: 300
-              })
-            });
-            
-            if (response.ok) {
-              const data = await response.json();
-              const imagePrompt = data.choices[0]?.message?.content?.trim();
-              
-              if (imagePrompt) {
-                updatedScenes[i] = {
-                  ...updatedScenes[i],
-                  generatedImagePrompt: imagePrompt
-                };
-              }
-            }
-          }
+          // Step 2: Generate simple image prompt focusing on scene and action
+          const simpleResult = await generateSimpleImagePrompt(
+            scene,
+            analysisResult.detectedCharacters,
+            analysisResult.settingContext
+          );
+          
+          updatedScenes[i] = {
+            ...updatedScenes[i],
+            generatedImagePrompt: simpleResult.prompt
+          };
+          
+          console.log(`[App] Simple prompt for scene ${scene.title}: ${simpleResult.prompt}`);
           
           // Update progress
           setCharacterAnalysisProgress(Math.round(((i + 1) / updatedScenes.length) * 100));
@@ -729,16 +718,25 @@ const App: React.FC = () => {
     
     const scene = scenes.find(s => s.id === sceneId);
     if (!scene) {
+      console.error('[App] Scene not found for ID:', sceneId);
       alert('Scene not found');
       return;
     }
 
+    console.log('[App] OpenAI API Key status:', {
+      exists: !!openaiApiKey,
+      length: openaiApiKey?.length,
+      startsWithSk: openaiApiKey?.startsWith('sk-')
+    });
+
     if (!openaiApiKey) {
+      console.error('[App] No OpenAI API key available');
       alert('Please set your OpenAI API key in the settings first');
       return;
     }
 
     if (!scene.generatedImagePrompt) {
+      console.error('[App] No generated image prompt for scene:', scene.title);
       alert('Please generate an image prompt for this scene first');
       return;
     }
@@ -749,20 +747,64 @@ const App: React.FC = () => {
     try {
       console.log(`[App] Generating image for scene: ${scene.title}`);
       
-      // Generate the image using OpenAI's Images API
-      const result = await generateSceneImage(
+      // Step 1: Enhance prompt with location consistency
+      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
+      const enhancedPrompt = await enhancePromptWithLocationConsistency(
         scene.generatedImagePrompt,
+        scene,
+        storyData
+      );
+      
+      console.log(`[App] Enhanced prompt with location consistency: ${enhancedPrompt.substring(0, 200)}...`);
+      
+      // Step 2: Generate the image using the enhanced prompt
+      const result = await generateSceneImageWithCharacterReferences(
+        enhancedPrompt,
+        scene.detectedCharacters || [],
+        voiceAssignments,
         openaiApiKey
       );
 
       if (result.success && result.imageUrl) {
-        // Save image using the new file storage system
+        // Step 3: Save image using the new file storage system
         const imageId = await saveGeneratedImage(result.imageUrl, sceneId);
         
         if (imageId) {
-          // Update the scene with the generated image ID
-          updateScene(sceneId, { generatedImageId: imageId });
+          // Step 4: Update scene with location information if this is the first image for this location
+          const locationKey = scene.locationKey || extractLocationKey(scene);
+          let updatedScene: Partial<Omit<Scene, 'id'>> = { generatedImageId: imageId };
+          
+          if (locationKey) {
+            // Check if this is the first image for this location
+            const existingLocationScene = scenes.find(s => 
+              s.locationKey === locationKey && s.baseLocationImageId && s.id !== sceneId
+            );
+            
+            if (!existingLocationScene) {
+              // This is the first image for this location - set it as base reference
+              updatedScene = {
+                generatedImageId: imageId,
+                locationKey: locationKey,
+                baseLocationImageId: imageId
+              };
+              console.log(`[App] Set as base location image for location: ${locationKey}`);
+            } else {
+              // Just add the location key for consistency tracking
+              updatedScene = { generatedImageId: imageId, locationKey };
+            }
+          }
+          
+          // Step 5: Update the scene with all the new information
+          updateScene(sceneId, updatedScene);
           console.log(`[App] Successfully generated and saved image for scene: ${scene.title} (ID: ${imageId})`);
+          
+          // Step 6: Update story data with location keys for future consistency
+          setScenes(prevScenes => {
+            const currentStoryData = { ...storyData, scenes: prevScenes };
+            const updatedStoryData = updateStoryWithLocationKeys(currentStoryData);
+            return updatedStoryData.scenes;
+          });
+          
         } else {
           alert('Failed to save the generated image');
         }
@@ -785,7 +827,9 @@ const App: React.FC = () => {
       <Toolbar
         onAddScene={addScene}
         onSave={handleSave}
+        onExportZip={handleExportZip}
         onLoad={handleLoad}
+        onImportZip={handleImportZip}
         onSetStartScene={handleSetStartScene}
         isStartSceneSet={!!startSceneId && startSceneId === activeSceneId}
         selectedSceneId={activeSceneId}

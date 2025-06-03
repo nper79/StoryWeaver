@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPT Image 1 API Test</title>
+    <title>OpenAI Image API Test</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -19,7 +19,7 @@
             border-radius: 8px;
             margin-bottom: 20px;
         }
-        input, textarea, button {
+        input, textarea, button, select {
             width: 100%;
             padding: 10px;
             margin: 10px 0;
@@ -75,33 +75,141 @@
             max-height: 200px;
             overflow-y: auto;
         }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background-color: #475569;
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+            margin-right: 5px;
+        }
+        .tab.active {
+            background-color: #0ea5e9;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .image-preview {
+            max-width: 300px;
+            max-height: 300px;
+            margin: 10px 0;
+            border: 2px dashed #64748b;
+            padding: 10px;
+            text-align: center;
+        }
+        .image-preview img {
+            max-width: 100%;
+            max-height: 280px;
+        }
+        .file-input-container {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+            width: 100%;
+        }
+        .file-input-container input[type=file] {
+            position: absolute;
+            top: 0;
+            right: 0;
+            min-width: 100%;
+            min-height: 100%;
+            font-size: 100px;
+            text-align: right;
+            filter: alpha(opacity=0);
+            opacity: 0;
+            outline: none;
+            cursor: pointer;
+            display: block;
+        }
+        .file-input-label {
+            display: block;
+            padding: 10px;
+            background-color: #475569;
+            color: #e2e8f0;
+            text-align: center;
+            border-radius: 4px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
-    <h1>GPT Image 1 API Test</h1>
+    <h1>OpenAI Image API Test</h1>
     
     <div class="container">
         <h2>Configuration</h2>
         <input type="password" id="apiKey" placeholder="Enter your OpenAI API Key" />
         
-        <h3>Image Parameters</h3>
-        <select id="size">
-            <option value="1024x1024">1024x1024 (Square)</option>
-            <option value="1536x1024">1536x1024 (Portrait)</option>
-            <option value="1024x1536">1024x1536 (Landscape)</option>
-        </select>
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('generate')">Generate Image</div>
+            <div class="tab" onclick="switchTab('edit')">Image Variations</div>
+        </div>
         
-        <select id="quality">
-            <option value="auto">Auto</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-        </select>
+        <!-- Generate Tab Content -->
+        <div id="generate-tab" class="tab-content active">
+            <h3>Image Parameters</h3>
+            <select id="generate-model">
+                <option value="gpt-image-1">GPT Image 1</option>
+                <option value="dall-e-3">DALL-E 3</option>
+                <option value="dall-e-2">DALL-E 2</option>
+            </select>
+            
+            <select id="generate-size">
+                <option value="1024x1024">1024x1024 (Square)</option>
+                <option value="1536x1024">1536x1024 (Portrait)</option>
+                <option value="1024x1536">1024x1536 (Landscape)</option>
+            </select>
+            
+            <select id="generate-quality">
+                <option value="auto">Auto</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+            </select>
+            
+            <h3>Prompt</h3>
+            <textarea id="generate-prompt" rows="4" placeholder="Enter your image prompt here...">A beautiful sunset over a mountain landscape with a lake in the foreground</textarea>
+            
+            <button id="generateBtn" onclick="generateImage()">Generate Image</button>
+        </div>
         
-        <h3>Prompt</h3>
-        <textarea id="prompt" rows="4" placeholder="Enter your image prompt here...">A beautiful sunset over a mountain landscape with a lake in the foreground</textarea>
-        
-        <button id="generateBtn" onclick="generateImage()">Generate Image</button>
+        <!-- Edit Tab Content -->
+        <div id="edit-tab" class="tab-content">
+            <h3>Reference Image</h3>
+            <div class="file-input-container">
+                <label class="file-input-label" for="source-image">Choose Character Reference Image (PNG format)</label>
+                <input type="file" id="source-image" accept="image/png" onchange="previewImage(this, 'source-preview')" />
+            </div>
+            <div id="source-preview" class="image-preview">
+                <p>No image selected</p>
+            </div>
+            
+            <h3>Variation Parameters</h3>
+            <select id="edit-size">
+                <option value="256x256">256x256</option>
+                <option value="512x512">512x512</option>
+                <option value="1024x1024" selected>1024x1024</option>
+            </select>
+            
+            <h3>Scene Prompt (for reference only)</h3>
+            <textarea id="edit-prompt" rows="4" placeholder="Describe the scene for your character...">This character in Madrid, Spain, smiling</textarea>
+            
+            <div class="note">
+                <p><strong>Note:</strong> The variations API doesn't use the prompt directly. This is a two-step process:</p>
+                <ol>
+                    <li>First, generate a variation of your character reference image (this step)</li>
+                    <li>Then use that variation with the prompt in the Generate Image tab</li>
+                </ol>
+                <p>The prompt is saved here for your convenience to copy/paste into the Generate tab after creating a variation.</p>
+            </div>
+            
+            <button id="editBtn" onclick="editImage()">Generate Variation</button>
+        </div>
     </div>
     
     <div class="container">
@@ -124,11 +232,58 @@
             console.log(message);
         }
         
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Deactivate all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Activate selected tab and content
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            document.querySelector(`.tab:nth-child(${tabName === 'generate' ? 1 : 2})`).classList.add('active');
+        }
+        
+        function previewImage(input, previewId) {
+            const preview = document.getElementById(previewId);
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                
+                reader.onload = function(e) {
+                    preview.innerHTML = `<img src="${e.target.result}" alt="Preview">`;
+                    log(`Image loaded for ${previewId}: ${input.files[0].name} (${Math.round(input.files[0].size / 1024)} KB)`);
+                };
+                
+                reader.readAsDataURL(input.files[0]);
+            } else {
+                preview.innerHTML = `<p>No image selected${previewId === 'mask-preview' ? ' (optional)' : ''}</p>`;
+            }
+        }
+        
+        // Convert a file to base64 string (without the data:image/png;base64, prefix)
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => {
+                    // Remove the data URL prefix (e.g., data:image/png;base64,)
+                    const base64String = reader.result.split(',')[1];
+                    resolve(base64String);
+                };
+                reader.onerror = error => reject(error);
+            });
+        }
+        
         async function generateImage() {
             const apiKey = document.getElementById('apiKey').value.trim();
-            const prompt = document.getElementById('prompt').value.trim();
-            const size = document.getElementById('size').value;
-            const quality = document.getElementById('quality').value;
+            const prompt = document.getElementById('generate-prompt').value.trim();
+            const model = document.getElementById('generate-model').value;
+            const size = document.getElementById('generate-size').value;
+            const quality = document.getElementById('generate-quality').value;
             const resultsDiv = document.getElementById('results');
             const generateBtn = document.getElementById('generateBtn');
             
@@ -154,17 +309,25 @@
             
             try {
                 log('Starting image generation...');
+                log(`Model: ${model}`);
                 log(`Prompt: ${prompt}`);
                 log(`Size: ${size}`);
                 log(`Quality: ${quality}`);
                 
                 const requestBody = {
-                    model: 'gpt-image-1',
+                    model: model,
                     prompt: prompt,
                     n: 1,
                     size: size,
-                    quality: quality
+                    quality: quality,
+                    response_format: 'b64_json'
                 };
+                
+                // Adjust parameters based on model
+                if (model === 'dall-e-3') {
+                    // DALL-E 3 uses 'standard' or 'hd' for quality
+                    requestBody.quality = quality === 'high' ? 'hd' : 'standard';
+                }
                 
                 log(`Request body: ${JSON.stringify(requestBody, null, 2)}`);
                 
@@ -231,6 +394,118 @@
             }
         }
         
+        async function editImage() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const size = document.getElementById('edit-size').value;
+            const sourceImageInput = document.getElementById('source-image');
+            const resultsDiv = document.getElementById('results');
+            const editBtn = document.getElementById('editBtn');
+            
+            // Clear previous results
+            resultsDiv.innerHTML = '';
+            logContent = '';
+            
+            // Validation
+            if (!apiKey) {
+                showResult('error', 'Please enter your OpenAI API key');
+                return;
+            }
+            
+            if (!sourceImageInput.files || !sourceImageInput.files[0]) {
+                showResult('error', 'Please select a reference image');
+                return;
+            }
+            
+            // Disable button and show loading
+            editBtn.disabled = true;
+            editBtn.textContent = 'Generating...';
+            showResult('info', 'Generating image variation, please wait...');
+            
+            try {
+                log('Starting image variation with GPT Image 1...');
+                log(`Size: ${size}`);
+                log(`Reference image: ${sourceImageInput.files[0].name} (${Math.round(sourceImageInput.files[0].size / 1024)} KB)`);
+                
+                // Create FormData for the API request
+                const formData = new FormData();
+                formData.append('n', '1');
+                formData.append('size', size);
+                formData.append('response_format', 'b64_json');
+                formData.append('image', sourceImageInput.files[0]);
+                
+                log('Sending image variation request to OpenAI API...');
+                log(`Request parameters: size=${size}`);
+                log(`Image: ${sourceImageInput.files[0].name} (${Math.round(sourceImageInput.files[0].size / 1024)} KB)`);
+                
+                const response = await fetch('https://api.openai.com/v1/images/variations', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: formData
+                });
+                
+                log(`Response status: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorData = {};
+                    try {
+                        errorData = JSON.parse(errorText);
+                    } catch (e) {
+                        log(`Error parsing JSON: ${e.message}`);
+                        log(`Raw error response: ${errorText}`);
+                    }
+                    log(`Error response: ${JSON.stringify(errorData, null, 2)}`);
+                    throw new Error(`API Error: ${response.status} - ${errorData.error?.message || errorText || 'Unknown error'}`);
+                }
+                
+                const data = await response.json();
+                
+                // Log response structure without the full base64 to avoid overwhelming the log
+                const logData = JSON.parse(JSON.stringify(data)); // Deep copy
+                if (logData.data && logData.data[0] && logData.data[0].b64_json) {
+                    const originalLength = logData.data[0].b64_json.length;
+                    logData.data[0].b64_json = `[BASE64 DATA - ${originalLength} characters]`;
+                }
+                log(`Success response: ${JSON.stringify(logData, null, 2)}`);
+                
+                if (data.data && data.data.length > 0) {
+                    const imageData = data.data[0];
+                    log(`Image data keys: ${Object.keys(imageData).join(', ')}`);
+                    
+                    if (imageData.b64_json) {
+                        // Handle base64 response
+                        const base64Image = imageData.b64_json;
+                        const dataUrl = `data:image/png;base64,${base64Image}`;
+                        log(`Image base64 received (length: ${base64Image.length} characters)`);
+                        log('Creating data URL for display...');
+                        showResult('success', 'Character variation generated successfully! You can use this as a reference image for the Generate Image tab.', dataUrl);
+                    } else if (imageData.url) {
+                        // Handle URL response (fallback)
+                        log(`Image URL received: ${imageData.url}`);
+                        showResult('success', 'Image edited successfully!', imageData.url);
+                    } else {
+                        log('No image URL or base64 data in response');
+                        log(`Image data structure: ${JSON.stringify(imageData, null, 2)}`);
+                        throw new Error('No image data received from API');
+                    }
+                } else {
+                    log('No image data in response');
+                    log(`Response data structure: ${JSON.stringify(data, null, 2)}`);
+                    throw new Error('No image data received from API');
+                }
+                
+            } catch (error) {
+                log(`Error: ${error.message}`);
+                showResult('error', `Error: ${error.message}`);
+            } finally {
+                // Re-enable button
+                editBtn.disabled = false;
+                editBtn.textContent = 'Edit Image';
+            }
+        }
+        
         function showResult(type, message, imageUrl = null) {
             const resultsDiv = document.getElementById('results');
             const resultDiv = document.createElement('div');
@@ -241,6 +516,23 @@
             if (imageUrl) {
                 content += `<br><br><img src="${imageUrl}" alt="Generated image" onload="log('Image loaded successfully')" onerror="log('Failed to load image')">`;
                 content += `<br><br><a href="${imageUrl}" target="_blank">Open image in new tab</a>`;
+                
+                // Add download link for base64 images
+                if (imageUrl.startsWith('data:')) {
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = imageUrl;
+                    downloadLink.download = `openai-image-${new Date().getTime()}.png`;
+                    downloadLink.textContent = 'Download Image';
+                    downloadLink.style.display = 'block';
+                    downloadLink.style.marginTop = '10px';
+                    downloadLink.className = 'file-input-label';
+                    
+                    content += '<br><br>';
+                    resultDiv.innerHTML = content;
+                    resultDiv.appendChild(downloadLink);
+                    resultsDiv.appendChild(resultDiv);
+                    return;
+                }
             }
             
             resultDiv.innerHTML = content;
@@ -253,14 +545,13 @@
             if (savedKey) {
                 document.getElementById('apiKey').value = savedKey;
             }
+            log('OpenAI Image API Test Page loaded');
         };
         
         // Save API key when changed
         document.getElementById('apiKey').addEventListener('input', function() {
             localStorage.setItem('openai_api_key', this.value);
         });
-        
-        log('GPT Image 1 Test Page loaded');
     </script>
 </body>
 </html>

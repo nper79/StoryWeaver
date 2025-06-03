@@ -10,6 +10,8 @@ export interface Scene {
   generatedImageId?: string; // Changed: Now stores image ID instead of data URL
   detectedCharacters?: string[]; // Characters detected in this scene
   settingContext?: string; // Setting/location context from this or previous scenes
+  locationKey?: string; // Key to identify the location/setting for consistency
+  baseLocationImageId?: string; // Reference image for this location to maintain consistency
 }
 
 export interface Connection {
