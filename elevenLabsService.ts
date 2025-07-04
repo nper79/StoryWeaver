@@ -6,7 +6,22 @@ const API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
  * Legacy function name for compatibility with PlayModal
  */
 export async function generateSpeech(text: string, voiceId: string, apiKey: string): Promise<Blob> {
-  return generateAudio(text, voiceId, apiKey);
+  const result = await generateAudioWithAlignment(text, voiceId, apiKey);
+  return result.audio;
+}
+
+/**
+ * Interface for ElevenLabs API response with alignment data
+ */
+export interface ElevenLabsResponse {
+  audio: Blob;
+  alignment?: WordAlignment[];
+}
+
+export interface WordAlignment {
+  word: string;
+  start: number;
+  end: number;
 }
 
 /**
@@ -19,14 +34,30 @@ export async function generateSpeech(text: string, voiceId: string, apiKey: stri
  * @throws {Error} If the API request fails.
  */
 export async function generateAudio(text: string, voiceId: string, apiKey: string): Promise<Blob> {
+  const result = await generateAudioWithAlignment(text, voiceId, apiKey);
+  return result.audio;
+}
+
+/**
+ * Generates audio with word-level alignment data from text using the ElevenLabs API.
+ *
+ * @param {string} text The text to convert to speech.
+ * @param {string} voiceId The ID of the voice to use.
+ * @param {string} apiKey The ElevenLabs API key.
+ * @returns {Promise<ElevenLabsResponse>} A promise that resolves with audio and alignment data.
+ * @throws {Error} If the API request fails.
+ */
+export async function generateAudioWithAlignment(text: string, voiceId: string, apiKey: string): Promise<ElevenLabsResponse> {
   if (!text || !voiceId || !apiKey) {
     throw new Error('Text, voice ID, and API key are required.');
   }
 
-  const url = `${API_URL}/${voiceId}`;
+  console.log('🎯 [ELEVENLABS] Generating audio with alignment for text:', text.substring(0, 50) + '...');
+
+  const url = `${API_URL}/${voiceId}/with-timestamps`;
 
   const headers = new Headers();
-  headers.append('Accept', 'audio/mpeg');
+  headers.append('Accept', 'application/json'); // Changed to JSON to receive alignment data
   headers.append(XI_API_KEY_HEADER, apiKey);
   headers.append('Content-Type', 'application/json');
 
@@ -36,9 +67,10 @@ export async function generateAudio(text: string, voiceId: string, apiKey: strin
     voice_settings: {
       stability: 0.5,
       similarity_boost: 0.75,
-      style: 0.0, // Default style
+      style: 0.0,
       use_speaker_boost: true,
     },
+    with_alignment: true, // This is the key parameter!
   });
 
   try {
@@ -60,11 +92,34 @@ export async function generateAudio(text: string, voiceId: string, apiKey: strin
       throw new Error(`ElevenLabs API request failed. ${errorDetails}`);
     }
 
-    const audioBlob = await response.blob();
-    return audioBlob;
+    const responseData = await response.json();
+    console.log('🎯 [ELEVENLABS] API Response received:', typeof responseData);
+    
+    // Convert base64 audio to Blob
+    let audioBlob: Blob;
+    if (responseData.audio_base64) {
+      console.log('🎵 [ELEVENLABS] Converting base64 audio to blob');
+      const audioData = atob(responseData.audio_base64);
+      const audioArray = new Uint8Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        audioArray[i] = audioData.charCodeAt(i);
+      }
+      audioBlob = new Blob([audioArray], { type: 'audio/mpeg' });
+    } else {
+      throw new Error('No audio data received from ElevenLabs API');
+    }
+
+    // Extract alignment data
+    const alignment: WordAlignment[] = responseData.alignment || [];
+    console.log('📊 [TIMESTAMPS] Extracted', alignment.length, 'word timestamps:', alignment);
+
+    return {
+      audio: audioBlob,
+      alignment: alignment
+    };
 
   } catch (error) {
-    console.error('Error in generateAudio:', error);
+    console.error('❌ [ELEVENLABS] Error in generateAudioWithAlignment:', error);
     throw error; 
   }
 }

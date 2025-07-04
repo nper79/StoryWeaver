@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { StoryData, Scene, Connection, VoiceAssignment, Beat, BeatPart } from '../types'; 
-import { generateSpeech } from '../elevenLabsService';
+import type { StoryData, Scene, Connection, VoiceAssignment, Beat } from '../types'; 
+import { generateAudioWithAlignment, WordAlignment, ElevenLabsResponse } from '../elevenLabsService';
 import { getImageFromStorage } from '../fileStorageService';
-import { BeatParsingService } from '../beatParsingService';
+import WordHighlightText from './WordHighlightText';
 
 interface PlayModalProps {
   isOpen: boolean;
@@ -21,6 +21,20 @@ interface ContentLine {
   originalLine: string; 
   isSpokenLine: boolean; 
 }
+
+interface BeatPart {
+  text: string;
+  speaker: string;
+}
+
+interface WordTimestamp {
+  word: string;
+  start_time_ms: number;
+  end_time_ms: number;
+}
+
+// Interface updated to match ElevenLabs service
+// Using WordAlignment from elevenLabsService
 
 interface CharacterProfile {
   voiceId?: string;
@@ -41,6 +55,10 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
   const [currentVideoUrl, setCurrentVideoUrl] = useState<string | undefined>(undefined);
   const [currentBeats, setCurrentBeats] = useState<Beat[]>([]);
   const [currentBeatIndex, setCurrentBeatIndex] = useState(0);
+  const [wordTimestamps, setWordTimestamps] = useState<WordTimestamp[]>([]);
+  const [audioCurrentTime, setAudioCurrentTime] = useState<number>(0);
+  const [audioDuration, setAudioDuration] = useState<number>(0);
+  const [isAudioPlaying, setIsAudioPlaying] = useState<boolean>(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const characterProfileMap = useRef<Map<string, CharacterProfile>>(new Map());
@@ -52,15 +70,122 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
   const cleanupAudio = useCallback(() => {
     if (audioRef.current) {
       audioRef.current.pause();
+      audioRef.current.currentTime = 0;
     }
     if (currentAudioBlobUrlRef.current) {
       URL.revokeObjectURL(currentAudioBlobUrlRef.current);
       currentAudioBlobUrlRef.current = null;
     }
     if (audioRef.current) {
-      audioRef.current.removeAttribute('src'); 
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
     }
   }, []);
+
+  // Use the centralized ElevenLabs service function
+  const generateSpeechWithTimestamps = async (text: string, voiceId: string, apiKey: string): Promise<ElevenLabsResponse> => {
+    console.log(' [PLAYMODAL] Generating speech with timestamps for:', text.substring(0, 50) + '...');
+    return await generateAudioWithAlignment(text, voiceId, apiKey);
+  };
+
+  const extractWordTimestamps = (alignment: any): WordTimestamp[] => {
+    console.log(' [TIMESTAMPS] Converting alignment data:', {
+      type: typeof alignment,
+      isArray: Array.isArray(alignment),
+      hasCharacters: alignment?.characters ? true : false,
+      charactersLength: alignment?.characters?.length || 0,
+      data: alignment
+    });
+    
+    if (!alignment) {
+      console.warn(' [TIMESTAMPS] Alignment is null/undefined');
+      return [];
+    }
+    
+    // Handle ElevenLabs character-based alignment format
+    if (alignment.characters && alignment.character_start_times_seconds && alignment.character_end_times_seconds) {
+      console.log(' [TIMESTAMPS] Processing character-based alignment from ElevenLabs');
+      
+      const characters = alignment.characters;
+      const startTimes = alignment.character_start_times_seconds;
+      const endTimes = alignment.character_end_times_seconds;
+      
+      if (characters.length !== startTimes.length || characters.length !== endTimes.length) {
+        console.warn(' [TIMESTAMPS] Mismatched array lengths in alignment data');
+        return [];
+      }
+      
+      // Convert character-based timestamps to word-based timestamps
+      const wordTimestamps: WordTimestamp[] = [];
+      let currentWord = '';
+      let wordStartTime = 0;
+      
+      for (let i = 0; i < characters.length; i++) {
+        const char = characters[i];
+        const startTime = startTimes[i];
+        const endTime = endTimes[i];
+        
+        if (char === ' ' || i === characters.length - 1) {
+          // End of word or end of text
+          if (currentWord.trim().length > 0) {
+            wordTimestamps.push({
+              word: currentWord.trim(),
+              start_time_ms: Math.round(wordStartTime * 1000),
+              end_time_ms: Math.round(endTime * 1000)
+            });
+            
+            console.log(` [WORD ${wordTimestamps.length}]:`, {
+              word: currentWord.trim(),
+              start_s: wordStartTime,
+              end_s: endTime,
+              start_ms: Math.round(wordStartTime * 1000),
+              end_ms: Math.round(endTime * 1000)
+            });
+          }
+          
+          currentWord = '';
+          wordStartTime = i < characters.length - 1 ? startTimes[i + 1] : endTime;
+        } else {
+          if (currentWord === '') {
+            wordStartTime = startTime;
+          }
+          currentWord += char;
+        }
+      }
+      
+      console.log(' [TIMESTAMPS] Converted', wordTimestamps.length, 'word timestamps from character data');
+      return wordTimestamps;
+    }
+    
+    // Fallback: try to handle as word-based array (legacy format)
+    if (Array.isArray(alignment)) {
+      console.log(' [TIMESTAMPS] Processing word-based alignment array');
+      
+      const wordTimestamps: WordTimestamp[] = alignment.map((item, index) => {
+        const timestamp = {
+          word: item.word,
+          start_time_ms: Math.round(item.start * 1000),
+          end_time_ms: Math.round(item.end * 1000)
+        };
+        
+        console.log(` [TIMESTAMP ${index + 1}]:`, {
+          word: item.word,
+          start_s: item.start,
+          end_s: item.end,
+          start_ms: timestamp.start_time_ms,
+          end_ms: timestamp.end_time_ms
+        });
+        
+        return timestamp;
+      });
+      
+      console.log(' [TIMESTAMPS] Converted', wordTimestamps.length, 'word timestamps');
+      return wordTimestamps;
+    }
+    
+    console.warn(' [TIMESTAMPS] Unknown alignment format:', typeof alignment);
+    return [];
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -91,6 +216,49 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
       setCurrentImageUrl(undefined);
     }
   }, [isOpen, initialSceneId, story.voiceAssignments, cleanupAudio]);
+
+  // Update audio currentTime and duration in real-time for word highlighting
+  useEffect(() => {
+    if (!audioRef.current) {
+      console.log('⚠️ [AUDIO SETUP] Audio ref not available yet');
+      return;
+    }
+
+    const audio = audioRef.current;
+    console.log('✅ [AUDIO SETUP] Setting up audio event listeners');
+    
+    const updateAudioTime = () => {
+      const currentTime = audio.currentTime;
+      setAudioCurrentTime(currentTime);
+      console.log('⏰ [AUDIO TIME] Current time updated:', currentTime.toFixed(2) + 's');
+    };
+    
+    const updateAudioDuration = () => {
+      const duration = audio.duration || 0;
+      setAudioDuration(duration);
+      console.log('⏱️ [AUDIO DURATION] Duration updated:', duration.toFixed(2) + 's');
+    };
+    
+    // Add event listeners
+    audio.addEventListener('timeupdate', updateAudioTime);
+    audio.addEventListener('loadedmetadata', updateAudioDuration);
+    audio.addEventListener('durationchange', updateAudioDuration);
+    
+    console.log('🎧 [AUDIO SETUP] Event listeners added successfully');
+    
+    // Initial update
+    if (audio.duration) {
+      setAudioDuration(audio.duration);
+      console.log('🎧 [AUDIO SETUP] Initial duration set:', audio.duration.toFixed(2) + 's');
+    }
+    
+    return () => {
+      console.log('🧹 [AUDIO CLEANUP] Removing event listeners');
+      audio.removeEventListener('timeupdate', updateAudioTime);
+      audio.removeEventListener('loadedmetadata', updateAudioDuration);
+      audio.removeEventListener('durationchange', updateAudioDuration);
+    };
+  }, [isOpen, isAudioLoading]); // Re-run when audio state changes
 
   useEffect(() => {
     if (!isOpen || !currentSceneId) { 
@@ -375,12 +543,19 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
           throw new Error('No ElevenLabs API key available');
         }
         
-        const blob = await generateSpeech(line.text, line.voiceId, keyToUse);
+        // Use ElevenLabs timestamps API for precise word-level highlighting
+        const response = await generateSpeechWithTimestamps(line.text, line.voiceId, keyToUse);
         if (isActive) {
-          const url = URL.createObjectURL(blob);
+          const url = URL.createObjectURL(response.audio);
           currentAudioBlobUrlRef.current = url;
+          
+          // Store timestamps for word-level highlighting
+          const wordTimestamps = extractWordTimestamps(response.alignment);
+          console.log('🎯 [TIMESTAMPS] Extracted word timestamps:', wordTimestamps.length, 'words');
+          setWordTimestamps(wordTimestamps);
+          
           if (audioRef.current) {
-            console.log('🎵 Audio blob created, setting up playback...');
+            console.log('🎵 Audio blob created with timestamps, setting up playback...');
             audioRef.current.src = url;
             audioRef.current.oncanplaythrough = () => {
               if (isActive) {
@@ -390,6 +565,17 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
                   if (isActive) setAudioError(`Audio playback failed: ${e.message}`);
                 });
               }
+            };
+            
+            // Add event listeners for play/pause state
+            audioRef.current.onplay = () => {
+              console.log('🎵 Audio started playing');
+              setIsAudioPlaying(true);
+            };
+            
+            audioRef.current.onpause = () => {
+              console.log('⏸️ Audio paused');
+              setIsAudioPlaying(false);
             };
             audioRef.current.onerror = () => {
                 console.error('❌ Audio element error');
@@ -526,6 +712,7 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
     
     console.log('🎵 Audio ended, cleaning up (no auto-advance)...');
     setIsAudioLoading(false);
+    setIsAudioPlaying(false); // Clear playing state for WordHighlightText
     
     // Clean up current audio
     if (audioRef.current && audioRef.current.currentSrc === currentAudioBlobUrlRef.current && currentAudioBlobUrlRef.current) {
@@ -787,23 +974,27 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
                 }
               }}
             >
-              {/* Scene/Beat Text */}
-              <div className="text-white text-lg leading-relaxed mb-4">
+              {/* Scene/Beat Text with Word-Level Highlighting */}
+              <div className="mb-4">
                 {inBeatMode ? (
-                  <div className="text-white">
-                    {currentBeatData?.text}
-                  </div>
+                  <WordHighlightText
+                    text={currentBeatData?.text || ''}
+                    isPlaying={isAudioPlaying}
+                    audioDuration={audioDuration}
+                    currentTime={audioCurrentTime}
+                    className="text-white text-lg leading-relaxed"
+                    wordTimestamps={wordTimestamps}
+                  />
                 ) : (
-                  <>
-                    {currentLineData?.speaker && (
-                      <div className="text-sky-300 font-semibold mb-2 text-xl">
-                        {currentLineData.speaker}
-                      </div>
-                    )}
-                    <div className="text-white">
-                      {currentLineData?.text || currentLineData?.originalLine}
-                    </div>
-                  </>
+                  <WordHighlightText
+                    text={currentLineData?.text || currentLineData?.originalLine || ''}
+                    isPlaying={isAudioPlaying}
+                    audioDuration={audioRef.current?.duration || 0}
+                    currentTime={audioRef.current?.currentTime || 0}
+                    speaker={currentLineData?.speaker}
+                    className="text-white text-lg leading-relaxed"
+                    wordTimestamps={wordTimestamps}
+                  />
                 )}
               </div>
 
