@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Beat Parsing Fix</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-case {
+            background: white;
+            margin: 20px 0;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .beat-original {
+            background-color: #e3f2fd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .beat-part {
+            background-color: #f3e5f5;
+            margin: 8px 0;
+            padding: 8px;
+            border-radius: 4px;
+            border-left: 4px solid #9c27b0;
+        }
+        .speaker {
+            font-weight: bold;
+            color: #1976d2;
+        }
+        .text {
+            margin-top: 5px;
+            font-style: italic;
+        }
+        h2 {
+            color: #1976d2;
+            border-bottom: 2px solid #e3f2fd;
+            padding-bottom: 10px;
+        }
+        .error {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success {
+            color: #388e3c;
+            background-color: #e8f5e8;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 Beat Parsing Fix Test</h1>
+    <p>Testing the improved beat parsing logic to fix voice alternation issues.</p>
+
+    <div id="results"></div>
+
+    <script type="module">
+        // Mock types and classes for testing
+        class BeatParsingService {
+            static parseBeatIntoParts(beat, detectedCharacters = []) {
+                const text = beat.text;
+                const parts = [];
+                
+                // Find all dialogue segments (text in quotes)
+                const dialogues = this.extractDialogues(text, detectedCharacters);
+                
+                if (dialogues.length === 0) {
+                    return [{
+                        speaker: 'Narrator',
+                        text: text.trim()
+                    }];
+                }
+                
+                let currentIndex = 0;
+                
+                for (const dialogue of dialogues) {
+                    // Add narration before this dialogue (if any)
+                    if (dialogue.startIndex > currentIndex) {
+                        const narrationText = text.substring(currentIndex, dialogue.startIndex).trim();
+                        if (narrationText) {
+                            parts.push({
+                                speaker: 'Narrator',
+                                text: narrationText
+                            });
+                        }
+                    }
+                    
+                    // Add the dialogue part
+                    parts.push({
+                        speaker: dialogue.speaker,
+                        text: dialogue.text
+                    });
+                    
+                    currentIndex = dialogue.endIndex;
+                }
+                
+                // Add any remaining narration after the last dialogue
+                if (currentIndex < text.length) {
+                    const remainingText = text.substring(currentIndex).trim();
+                    if (remainingText) {
+                        parts.push({
+                            speaker: 'Narrator',
+                            text: remainingText
+                        });
+                    }
+                }
+                
+                return parts;
+            }
+            
+            static extractDialogues(text, detectedCharacters = []) {
+                const dialogues = [];
+                const quoteRegex = /(['"])((?:(?!\1)[^\\]|\\.)*)(\1)/g;
+                let match;
+                
+                while ((match = quoteRegex.exec(text)) !== null) {
+                    const fullMatch = match[0];
+                    const quoteContent = match[2];
+                    const startIndex = match.index;
+                    const endIndex = match.index + fullMatch.length;
+                    
+                    const speaker = this.identifySpeaker(text, startIndex, detectedCharacters);
+                    
+                    dialogues.push({
+                        speaker,
+                        text: quoteContent,
+                        startIndex,
+                        endIndex
+                    });
+                }
+                
+                return dialogues;
+            }
+            
+            static identifySpeaker(text, dialogueStartIndex, detectedCharacters = []) {
+                const contextStart = Math.max(0, dialogueStartIndex - 150);
+                const context = text.substring(contextStart, dialogueStartIndex);
+                
+                // Get text after the dialogue to check for attribution patterns
+                const afterDialogueStart = dialogueStartIndex;
+                const afterDialogueEnd = Math.min(text.length, dialogueStartIndex + 200);
+                const afterContext = text.substring(afterDialogueStart, afterDialogueEnd);
+                
+                // First, check for explicit attribution patterns AFTER the dialogue
+                const postDialoguePatterns = [
+                    /"[^"]*"\s*,?\s*(\w+)\s+(?:says?|said|asks?|asked|responds?|responded|replies?|replied|calls?|called|shouts?|shouted|whispers?|whispered)/i,
+                    /"[^"]*"\s*,?\s*(?:she|he)\s+(?:says?|said|asks?|asked|responds?|responded|replies?|replied)/i
+                ];
+                
+                for (const pattern of postDialoguePatterns) {
+                    const match = afterContext.match(pattern);
+                    if (match) {
+                        if (match[1] && this.isValidCharacterName(match[1])) {
+                            return match[1];
+                        } else {
+                            const recentCharacter = this.findRecentCharacter(context, detectedCharacters);
+                            if (recentCharacter) {
+                                return recentCharacter;
+                            }
+                        }
+                    }
+                }
+                
+                // Check for patterns indicating who is being addressed or responding
+                const responsePatterns = [
+                    /(?:her|his|the)\s+(mother|father|mom|dad|teacher|friend|\w+)\s+(?:looks?|turns?|responds?|replies?|says?|speaks?)/i,
+                    /(mother|father|mom|dad|teacher|friend|\w+)\s+(?:looks?|turns?|responds?|replies?|says?|speaks?)/i
+                ];
+                
+                for (const pattern of responsePatterns) {
+                    const match = context.match(pattern);
+                    if (match) {
+                        const potentialSpeaker = match[1];
+                        const normalizedSpeaker = this.normalizeSpeakerName(potentialSpeaker, detectedCharacters);
+                        if (normalizedSpeaker) {
+                            return normalizedSpeaker;
+                        }
+                    }
+                }
+                
+                // Original patterns for speaker identification BEFORE the dialogue
+                const preDialoguePatterns = [
+                    /(\w+)\s+(?:says?|said|asks?|asked|calls?|called|shouts?|shouted|whispers?|whispered)[\s:]/i,
+                    /(\w+):\s*$/,
+                    /(\w+)\s+(?:calls?|tells?|says?|asks?|shouts?|whispers?)/i,
+                ];
+                
+                for (const pattern of preDialoguePatterns) {
+                    const match = context.match(pattern);
+                    if (match) {
+                        const potentialSpeaker = match[1];
+                        if (this.isValidCharacterName(potentialSpeaker) && 
+                            (detectedCharacters.length === 0 || detectedCharacters.includes(potentialSpeaker))) {
+                            return potentialSpeaker;
+                        }
+                    }
+                }
+                
+                const recentCharacter = this.findRecentCharacter(context, detectedCharacters);
+                if (recentCharacter) {
+                    return recentCharacter;
+                }
+                
+                return 'Unknown Speaker';
+            }
+            
+            static normalizeSpeakerName(speakerName, detectedCharacters = []) {
+                const normalized = speakerName.toLowerCase();
+                
+                const mappings = {
+                    'mom': 'Mother',
+                    'mother': 'Mother',
+                    'dad': 'Father',
+                    'father': 'Father',
+                    'teacher': 'Teacher',
+                    'friend': 'Friend'
+                };
+                
+                if (mappings[normalized]) {
+                    return mappings[normalized];
+                }
+                
+                const properName = speakerName.charAt(0).toUpperCase() + speakerName.slice(1).toLowerCase();
+                if (this.isValidCharacterName(properName) && 
+                    (detectedCharacters.length === 0 || detectedCharacters.includes(properName))) {
+                    return properName;
+                }
+                
+                return null;
+            }
+            
+            static isValidCharacterName(name) {
+                return /^[A-Z][a-zA-Z]{1,20}$/.test(name) && 
+                       !['The', 'She', 'He', 'They', 'It', 'This', 'That'].includes(name);
+            }
+            
+            static findRecentCharacter(context, detectedCharacters = []) {
+                const words = context.split(/\s+/);
+                
+                for (let i = words.length - 1; i >= 0; i--) {
+                    const word = words[i].replace(/[.,!?:;]$/, '');
+                    if (this.isValidCharacterName(word) && 
+                        (detectedCharacters.length === 0 || detectedCharacters.includes(word))) {
+                        return word;
+                    }
+                }
+                
+                return null;
+            }
+        }
+
+        // Test cases
+        const testCases = [
+            {
+                name: "Beat 1 - Working correctly",
+                beat: {
+                    text: 'Lucy comes home from school, she lost her cat. "Whiskers, I need to find you!" she calls out desperately.'
+                },
+                detectedCharacters: ['Lucy', 'Whiskers'],
+                expected: [
+                    { speaker: 'Narrator', text: 'Lucy comes home from school, she lost her cat.' },
+                    { speaker: 'Lucy', text: 'Whiskers, I need to find you!' },
+                    { speaker: 'Narrator', text: 'she calls out desperately.' }
+                ]
+            },
+            {
+                name: "Beat 2 - The problematic case",
+                beat: {
+                    text: 'Lucy walks into the kitchen. "Mom, have you seen Whiskers?" she asks. Her mother looks up from cooking. "No dear, I haven\'t seen him today."'
+                },
+                detectedCharacters: ['Lucy', 'Whiskers', 'Mother'],
+                expected: [
+                    { speaker: 'Narrator', text: 'Lucy walks into the kitchen.' },
+                    { speaker: 'Lucy', text: 'Mom, have you seen Whiskers?' },
+                    { speaker: 'Narrator', text: 'she asks. Her mother looks up from cooking.' },
+                    { speaker: 'Mother', text: 'No dear, I haven\'t seen him today.' }
+                ]
+            }
+        ];
+
+        function runTests() {
+            const resultsDiv = document.getElementById('results');
+            
+            testCases.forEach((testCase, index) => {
+                console.log(`\n🧪 Testing: ${testCase.name}`);
+                
+                const testDiv = document.createElement('div');
+                testDiv.className = 'test-case';
+                
+                const title = document.createElement('h2');
+                title.textContent = `Test ${index + 1}: ${testCase.name}`;
+                testDiv.appendChild(title);
+                
+                const originalDiv = document.createElement('div');
+                originalDiv.className = 'beat-original';
+                originalDiv.innerHTML = `<strong>Original:</strong> ${testCase.beat.text}`;
+                testDiv.appendChild(originalDiv);
+                
+                try {
+                    const result = BeatParsingService.parseBeatIntoParts(testCase.beat, testCase.detectedCharacters);
+                    
+                    console.log('Result:', result);
+                    
+                    // Display results
+                    result.forEach((part, partIndex) => {
+                        const partDiv = document.createElement('div');
+                        partDiv.className = 'beat-part';
+                        partDiv.innerHTML = `
+                            <div class="speaker">Part ${partIndex + 1}: ${part.speaker}</div>
+                            <div class="text">"${part.text}"</div>
+                        `;
+                        testDiv.appendChild(partDiv);
+                    });
+                    
+                    // Check if result matches expected
+                    let isCorrect = true;
+                    if (result.length !== testCase.expected.length) {
+                        isCorrect = false;
+                    } else {
+                        for (let i = 0; i < result.length; i++) {
+                            if (result[i].speaker !== testCase.expected[i].speaker || 
+                                result[i].text !== testCase.expected[i].text) {
+                                isCorrect = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    const statusDiv = document.createElement('div');
+                    statusDiv.className = isCorrect ? 'success' : 'error';
+                    statusDiv.textContent = isCorrect ? '✅ Test PASSED' : '❌ Test FAILED - Check speaker assignments';
+                    testDiv.appendChild(statusDiv);
+                    
+                } catch (error) {
+                    console.error('Test failed:', error);
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'error';
+                    errorDiv.textContent = `❌ Error: ${error.message}`;
+                    testDiv.appendChild(errorDiv);
+                }
+                
+                resultsDiv.appendChild(testDiv);
+            });
+        }
+
+        // Run tests when page loads
+        runTests();
+    </script>
+</body>
+</html>

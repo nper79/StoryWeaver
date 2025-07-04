@@ -16,6 +16,13 @@ interface SettingsModalProps {
   onGenerateImagePrompts: () => Promise<void>; 
   isGeneratingPrompts: boolean; 
   characterAnalysisProgress?: number; // Progress percentage for character analysis
+  onGenerateAllSceneImages: () => Promise<void>;
+  isBulkGeneratingImages: boolean;
+  bulkImageProgress: number;
+  onMigrateBeats?: () => void; // Optional prop for beat migration
+  isMigratingBeats?: boolean; // Optional prop for migration loading state
+  currentNarratorVoiceId?: string; // Current narrator voice ID
+  onSetNarratorVoiceId: (voiceId: string) => void; // Callback to set narrator voice
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
@@ -30,6 +37,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onGenerateImagePrompts,
   isGeneratingPrompts,
   characterAnalysisProgress,
+  onGenerateAllSceneImages,
+  isBulkGeneratingImages,
+  bulkImageProgress,
+  onMigrateBeats,
+  isMigratingBeats,
+  currentNarratorVoiceId,
+  onSetNarratorVoiceId,
 }) => {
   const [assignments, setAssignments] = useState<VoiceAssignment[]>([]);
   const [availableVoices, setAvailableVoices] = useState<ElevenLabsVoice[]>([]);
@@ -119,9 +133,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      if (currentElevenLabsApiKey) { // Updated
-        loadVoices(currentElevenLabsApiKey); // Updated
+      // Always prioritize environment variable
+      const envApiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
+      const keyToUse = envApiKey || currentElevenLabsApiKey;
+      
+      console.log('[VoiceSettings] Auto-loading voices...');
+      console.log('[VoiceSettings] Environment key available:', envApiKey ? 'yes' : 'no');
+      console.log('[VoiceSettings] Current key available:', currentElevenLabsApiKey ? 'yes' : 'no');
+      
+      if (keyToUse) {
+        console.log('[VoiceSettings] Loading voices with key:', keyToUse.substring(0, 5) + '...');
+        loadVoices(keyToUse);
       } else {
+        console.log('[VoiceSettings] No API key available, clearing voices');
         setAvailableVoices([]);
         setError(null); 
       }
@@ -130,11 +154,26 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
 
   const handleSetElevenLabsKeyAndLoad = () => { // Renamed
-    const trimmedKey = elevenLabsApiKeyInput.trim();
-    onSetElevenLabsApiKey(trimmedKey || null); // Updated 
-    if (!trimmedKey) {
-        setAvailableVoices([]);
-        setError("ElevenLabs API Key cannot be empty if you intend to use it.");
+    // Always prioritize environment variable if available
+    const envApiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
+    const keyToUse = envApiKey || elevenLabsApiKeyInput.trim();
+    
+    console.log('[VoiceSettings] Environment API key:', envApiKey ? 'found' : 'not found');
+    console.log('[VoiceSettings] Manual input API key:', elevenLabsApiKeyInput.trim() ? 'provided' : 'empty');
+    console.log('[VoiceSettings] Using key:', keyToUse ? 'yes' : 'no');
+    
+    if (envApiKey) {
+      console.log('[VoiceSettings] Using environment API key (priority)');
+      onSetElevenLabsApiKey(envApiKey);
+      loadVoices(envApiKey);
+    } else if (elevenLabsApiKeyInput.trim()) {
+      console.log('[VoiceSettings] Using manual input API key');
+      const trimmedKey = elevenLabsApiKeyInput.trim();
+      onSetElevenLabsApiKey(trimmedKey);
+      loadVoices(trimmedKey);
+    } else {
+      setAvailableVoices([]);
+      setError("ElevenLabs API Key cannot be empty if you intend to use it.");
     }
   };
 
@@ -240,9 +279,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           const imageId = await saveCharacterImage(blob, character.characterName);
           
           if (imageId) {
+            console.log(`[VoiceSettings] ✅ Image saved for ${character.characterName} with new ID: ${imageId}`);
+            
             // Update assignments with the new image ID
-            const updated = assignments.map((a, i) => i === index ? { ...a, imageId } : a);
+            const updated = assignments.map((a, i) => {
+              if (i === index) {
+                console.log(`[VoiceSettings] Updating assignment for ${a.characterName}: ${a.imageId} -> ${imageId}`);
+                return { ...a, imageId };
+              }
+              return a;
+            });
             setAssignments(updated);
+            
+            console.log(`[VoiceSettings] Updated assignments:`, updated.map(a => ({
+              name: a.characterName,
+              imageId: a.imageId
+            })));
             
             // Update UI
             setCharacterUrlInputs(prev => ({...prev, [index]: ''}));
@@ -368,6 +420,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSaveSettings = () => { 
     // Only keep assignments with non-empty character names
     const validAssignments = assignments.filter(a => a.characterName.trim() !== '');
+    
+    console.log(`[VoiceSettings] ✅ Saving assignments:`, validAssignments.map(a => ({
+      name: a.characterName,
+      imageId: a.imageId,
+      voiceId: a.voiceId
+    })));
     
     // Save assignments
     onSaveAssignments(validAssignments);
@@ -580,6 +638,48 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
         </details>
 
+        {/* Section for Narrator Voice Selection */}
+        <details className="bg-slate-750 p-3 rounded-md group" open>
+            <summary className="text-md font-semibold text-blue-300 cursor-pointer group-hover:text-blue-200 list-none flex justify-between items-center">
+                <span>Narrator Voice Selection</span>
+                <span className="text-xs text-slate-400 group-open:rotate-90 transform transition-transform duration-200">&#9656;</span>
+            </summary>
+            <div className="mt-3 space-y-3">
+                <p className="text-sm text-slate-300">
+                    Select a voice for the narrator throughout the entire story. This voice will be used for all narrative text that isn't dialogue.
+                </p>
+                
+                <div className="flex items-center space-x-2">
+                    <label className="text-sm font-medium text-slate-300 min-w-0 shrink-0">
+                        Narrator Voice:
+                    </label>
+                    <select
+                        value={currentNarratorVoiceId || ''}
+                        onChange={(e) => onSetNarratorVoiceId(e.target.value)}
+                        className="flex-grow p-2 border border-slate-500 rounded bg-slate-600 text-slate-100 focus:ring-sky-500 focus:border-sky-500"
+                        style={{ backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`, backgroundPosition: 'right 0.5rem center', backgroundSize: '1.5em 1.5em'}}
+                        disabled={!currentElevenLabsApiKey || availableVoices.length === 0 || isLoadingVoices}
+                    >
+                        <option value="">
+                            {!currentElevenLabsApiKey ? "Set API Key First" : 
+                            isLoadingVoices ? "Loading voices..." : 
+                            (availableVoices.length === 0 && error ? "No voices (Error)" : 
+                            (availableVoices.length === 0 ? "No voices available" : "Select Narrator Voice"))}
+                        </option>
+                        {availableVoices.map(voice => (
+                        <option key={voice.voice_id} value={voice.voice_id}>
+                            {voice.name} ({voice.labels?.accent ? `${voice.labels.accent}, ` : ''}{voice.category || 'standard'})
+                        </option>
+                        ))}
+                    </select>
+                </div>
+                
+                <p className="text-xs text-slate-400">
+                    This voice will be used for all narrative text (non-dialogue) throughout your story. Character-specific voices will still be used for their dialogue.
+                </p>
+            </div>
+        </details>
+
         {/* Section for Image Prompt Generation */}
         <details className="bg-slate-750 p-3 rounded-md group" open>
             <summary className="text-md font-semibold text-purple-300 cursor-pointer group-hover:text-purple-200 list-none flex justify-between items-center">
@@ -609,6 +709,69 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
         </details>
 
+        <details className="bg-slate-750 p-3 rounded-md group" open>
+            <summary className="text-md font-semibold text-purple-300 cursor-pointer group-hover:text-purple-200 list-none flex justify-between items-center">
+                <span>Bulk Image Generation (OpenAI)</span>
+                <span className="text-xs text-slate-400 group-open:rotate-90 transform transition-transform duration-200">&#9656;</span>
+            </summary>
+            <div className="mt-3 space-y-3">
+                 <button
+                    onClick={onGenerateAllSceneImages}
+                    className="w-full px-4 py-2 rounded bg-purple-600 hover:bg-purple-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isBulkGeneratingImages}
+                >
+                    {isBulkGeneratingImages ? (
+                        <span className="flex items-center justify-center">
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Generating Images...
+                        </span>
+                    ) : (
+                        "Generate Images for All Scenes"
+                    )}
+                </button>
+                 {isBulkGeneratingImages && <p className="text-xs text-slate-400 text-center mt-2">This may take a moment, especially for longer stories...</p>}
+                 {bulkImageProgress !== undefined && <p className="text-xs text-slate-400 text-center mt-2">Bulk Image Generation Progress: {bulkImageProgress}%</p>}
+            </div>
+        </details>
+
+        {/* Section for Beat Migration */}
+        <details className="bg-slate-750 p-3 rounded-md group">
+            <summary className="text-md font-semibold text-yellow-300 cursor-pointer group-hover:text-yellow-200 list-none flex justify-between items-center">
+                <span>Beat Migration (Speaker Annotations)</span>
+                <span className="text-xs text-slate-400 group-open:rotate-90 transform transition-transform duration-200">&#9656;</span>
+            </summary>
+            <div className="mt-3 space-y-3">
+                <p className="text-xs text-slate-400">
+                    Migrate existing beats to use speaker annotations [Speaker] for better voice assignment. 
+                    This will automatically analyze your beats and add speaker tags like [Narrator] and [CharacterName].
+                </p>
+                <button
+                    onClick={onMigrateBeats || (() => {})}
+                    className="w-full px-4 py-2 rounded bg-yellow-600 hover:bg-yellow-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isMigratingBeats || !onMigrateBeats}
+                >
+                    {isMigratingBeats ? (
+                        <span className="flex items-center justify-center">
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Migrating Beats...
+                        </span>
+                    ) : (
+                        "Migrate All Beats to New Format"
+                    )}
+                </button>
+                <p className="text-xs text-slate-400">
+                    ⚠️ This will update all existing beats in your story. The original content will be preserved, 
+                    but speaker annotations will be added for better voice assignment.
+                </p>
+            </div>
+        </details>
+
         <div className="flex justify-end space-x-3 pt-4 border-t border-slate-600 mt-4">
           <button
             onClick={onClose}
@@ -619,7 +782,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             onClick={handleSaveSettings} 
             className="px-4 py-2 rounded bg-sky-500 hover:bg-sky-600 text-white transition-colors"
-            disabled={(isLoadingVoices && !!currentElevenLabsApiKey) || isGeneratingPrompts} 
+            disabled={(isLoadingVoices && !!currentElevenLabsApiKey) || isGeneratingPrompts || isBulkGeneratingImages} 
           >
             Save & Close Settings
           </button>

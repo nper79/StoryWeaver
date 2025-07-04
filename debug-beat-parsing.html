@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Beat Parsing</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .beat { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+        .part { background: #e0e0ff; padding: 5px; margin: 5px 0; border-left: 3px solid #0066cc; }
+        .speaker { font-weight: bold; color: #cc0066; }
+        .text { margin-left: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Debug Beat Parsing</h1>
+    <div id="output"></div>
+
+    <script>
+        // Simplified version of BeatParsingService for debugging
+        class DebugBeatParsingService {
+            static parseBeatIntoParts(beat, detectedCharacters = []) {
+                const text = beat.text;
+                const parts = [];
+                
+                console.log('🔍 Parsing beat:', text);
+                
+                // Find all dialogue segments (text in quotes)
+                const dialogues = this.extractDialogues(text, detectedCharacters);
+                console.log('🗣️ Found dialogues:', dialogues);
+                
+                if (dialogues.length === 0) {
+                    // No dialogue found, entire text is narration
+                    return [{
+                        speaker: 'Narrator',
+                        text: text.trim()
+                    }];
+                }
+                
+                let currentIndex = 0;
+                
+                for (const dialogue of dialogues) {
+                    // Add narration before this dialogue (if any)
+                    if (dialogue.startIndex > currentIndex) {
+                        const narrationText = text.substring(currentIndex, dialogue.startIndex).trim();
+                        if (narrationText) {
+                            parts.push({
+                                speaker: 'Narrator',
+                                text: narrationText
+                            });
+                        }
+                    }
+                    
+                    // Add the dialogue part
+                    parts.push({
+                        speaker: dialogue.speaker,
+                        text: dialogue.text
+                    });
+                    
+                    currentIndex = dialogue.endIndex;
+                }
+                
+                // Add any remaining narration after the last dialogue
+                if (currentIndex < text.length) {
+                    const remainingText = text.substring(currentIndex).trim();
+                    if (remainingText) {
+                        parts.push({
+                            speaker: 'Narrator',
+                            text: remainingText
+                        });
+                    }
+                }
+                
+                console.log('📝 Final parts:', parts);
+                return parts;
+            }
+            
+            static extractDialogues(text, detectedCharacters = []) {
+                const dialogues = [];
+                
+                // Regex to find quoted text (both single and double quotes)
+                const quoteRegex = /(['"])((?:(?!\1)[^\\]|\\.)*)(\1)/g;
+                let match;
+                
+                while ((match = quoteRegex.exec(text)) !== null) {
+                    const fullMatch = match[0];
+                    const quoteContent = match[2];
+                    const startIndex = match.index;
+                    const endIndex = match.index + fullMatch.length;
+                    
+                    // Try to identify the speaker from the context before the quote
+                    const speaker = this.identifySpeaker(text, startIndex, detectedCharacters);
+                    
+                    dialogues.push({
+                        speaker,
+                        text: quoteContent,
+                        startIndex,
+                        endIndex
+                    });
+                }
+                
+                return dialogues;
+            }
+            
+            static identifySpeaker(text, quoteStartIndex, detectedCharacters = []) {
+                // Look for speaker context before the quote (up to 100 characters back)
+                const contextStart = Math.max(0, quoteStartIndex - 100);
+                const context = text.substring(contextStart, quoteStartIndex).toLowerCase();
+                
+                // Try to find character names in the context
+                for (const character of detectedCharacters) {
+                    if (context.includes(character.toLowerCase())) {
+                        return character;
+                    }
+                }
+                
+                // Default to Lucy if no specific character found
+                return 'Lucy';
+            }
+        }
+
+        // Test with sample beat text
+        const testBeats = [
+            {
+                id: 'test1',
+                text: 'Lucy comes home from school, she lost her cat. "Whiskers, I need to find you!" she calls out desperately.'
+            },
+            {
+                id: 'test2', 
+                text: 'Lucy walks into the kitchen. "Mom, have you seen Whiskers?" she asks. Her mother looks up from cooking. "No dear, I haven\'t seen him today."'
+            }
+        ];
+
+        const detectedCharacters = ['Lucy', 'Whiskers', 'Mom'];
+
+        const output = document.getElementById('output');
+
+        testBeats.forEach((beat, index) => {
+            const beatDiv = document.createElement('div');
+            beatDiv.className = 'beat';
+            beatDiv.innerHTML = `<h3>Beat ${index + 1}</h3><p><strong>Original:</strong> ${beat.text}</p>`;
+            
+            const parts = DebugBeatParsingService.parseBeatIntoParts(beat, detectedCharacters);
+            
+            parts.forEach((part, partIndex) => {
+                const partDiv = document.createElement('div');
+                partDiv.className = 'part';
+                partDiv.innerHTML = `
+                    <div class="speaker">Part ${partIndex + 1}: ${part.speaker}</div>
+                    <div class="text">"${part.text}"</div>
+                `;
+                beatDiv.appendChild(partDiv);
+            });
+            
+            output.appendChild(beatDiv);
+        });
+    </script>
+</body>
+</html>

@@ -3,8 +3,9 @@ import type { Scene, Connection, StoryData, VoiceAssignment } from './types';
 import Toolbar from './components/Toolbar';
 import CanvasView from './components/CanvasView';
 import ZoomControls from './components/ZoomControls';
-import PlayModal from './components/PlayModal'; 
+import PlayModal from './components/PlayModal';
 import VoiceSettingsModal from './components/VoiceSettingsModal';
+
 
 import { 
   DEFAULT_SCENE_WIDTH, 
@@ -21,22 +22,28 @@ import {
   LAYOUT_HORIZONTAL_GAP,
   WORLD_WIDTH,
   WORLD_HEIGHT,
-  ELEVEN_LABS_API_KEY_LOCAL_STORAGE_KEY,
+
   OPENAI_API_KEY_LOCAL_STORAGE_KEY,
 } from './constants';
+import { 
+  getImageGenerationStrategy 
+} from './sceneSequenceService';
+import { generateSceneImageWithCharacterReferences } from './imageGenerationService';
+import { saveGeneratedImage, saveCharacterImage } from './fileStorageService';
+import { beatSubdivisionService } from './services/beatSubdivisionService';
+import { exportStoryToZip, importStoryFromZip } from './backupService';
+import { aiStoryService } from './services/aiStoryService';
 import { 
   analyzeScene, 
   generateSimpleImagePrompt, 
   type CharacterDetectionResult 
 } from './characterAnalysisService';
 import { 
-  enhancePromptWithLocationConsistency,
   extractLocationKey,
   updateStoryWithLocationKeys
 } from './locationConsistencyService';
-import { generateSceneImageWithCharacterReferences } from './imageGenerationService';
-import { saveGeneratedImage, saveCharacterImage } from './fileStorageService';
-import { exportStoryToZip, importStoryFromZip } from './backupService';
+import { textRewriteService, type LanguageLevel } from './services/textRewriteService';
+import { BeatMigrationService } from './services/beatMigrationService';
 
 const generateId = (): string => Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
 const STORY_DATA_LOCAL_STORAGE_KEY = 'interactiveStoryData';
@@ -48,13 +55,21 @@ const App: React.FC = () => {
   const [startSceneId, setStartSceneId] = useState<string | null>(null);
   const [zoomLevel, setZoomLevel] = useState<number>(DEFAULT_ZOOM);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [voiceAssignments, setVoiceAssignments] = useState<VoiceAssignment[]>([]);
+  const [narratorVoiceId, setNarratorVoiceId] = useState<string | null>(null);
+  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState<boolean>(false);
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null);
   const [openaiApiKey, setOpenaiApiKey] = useState<string | null>(null);
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState<boolean>(false);
   const [characterAnalysisProgress, setCharacterAnalysisProgress] = useState<number>(0);
   const [generatingImageForScene, setGeneratingImageForScene] = useState<string | null>(null);
+  const [generatingContinuationForScene, setGeneratingContinuationForScene] = useState<string | null>(null);
+  const [isBulkGeneratingImages, setIsBulkGeneratingImages] = useState<boolean>(false);
+  const [bulkImageProgress, setBulkImageProgress] = useState<number>(0);
+  const [isMigratingBeats, setIsMigratingBeats] = useState<boolean>(false);
+  const [rewritingTextForScene, setRewritingTextForScene] = useState<string | null>(null);
+  const [subdividingSceneIntoBeats, setSubdividingSceneIntoBeats] = useState<string | null>(null);
+  const [generatingBeatImageFor, setGeneratingBeatImageFor] = useState<{ sceneId: string; beatId: string } | null>(null);
 
   const loadInitialData = () => {
     const savedStory = localStorage.getItem(STORY_DATA_LOCAL_STORAGE_KEY);
@@ -62,6 +77,7 @@ const App: React.FC = () => {
     let initialConnections: Connection[] = [];
     let initialStartSceneId: string | null = null;
     let initialVoiceAssignments: VoiceAssignment[] = [];
+    let initialNarratorVoiceId: string | null = null;
 
     if (savedStory) {
       try {
@@ -75,6 +91,7 @@ const App: React.FC = () => {
         initialConnections = parsedStory.connections || [];
         initialStartSceneId = parsedStory.startSceneId || localStorage.getItem(INITIAL_START_SCENE_ID_KEY) || null;
         initialVoiceAssignments = parsedStory.voiceAssignments || [];
+        initialNarratorVoiceId = parsedStory.narratorVoiceId || null;
         
         // Check if we need to migrate image data from localStorage to IndexedDB
         const scenesMigrationNeeded = initialScenes.some(scene => (scene as any).generatedImageUrl && !scene.generatedImageId);
@@ -188,7 +205,8 @@ const App: React.FC = () => {
           height: DEFAULT_SCENE_MIN_HEIGHT, 
           generatedImagePrompt: undefined,
           detectedCharacters: undefined,
-          settingContext: undefined
+          settingContext: undefined,
+          generatedImageId: undefined,
         }];
         initialStartSceneId = firstSceneId;
     }
@@ -197,6 +215,7 @@ const App: React.FC = () => {
     setConnections(initialConnections);
     setStartSceneId(initialStartSceneId);
     setVoiceAssignments(initialVoiceAssignments);
+    setNarratorVoiceId(initialNarratorVoiceId);
 
     const savedZoom = localStorage.getItem(ZOOM_LEVEL_KEY);
     if (savedZoom) {
@@ -204,6 +223,15 @@ const App: React.FC = () => {
       if (!isNaN(parsedZoom) && parsedZoom >= MIN_ZOOM && parsedZoom <= MAX_ZOOM) {
         setZoomLevel(parsedZoom);
       }
+    }
+
+    // Load ElevenLabs API key from .env
+    const envElevenLabsApiKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
+    if (envElevenLabsApiKey) {
+      setElevenLabsApiKey(envElevenLabsApiKey);
+      console.log('[App] ElevenLabs API key loaded from .env.');
+    } else {
+      console.warn('[App] VITE_ELEVENLABS_API_KEY not found in .env. Text-to-speech will not function.');
     }
 
     // Load OpenAI API key from environment variable
@@ -221,20 +249,6 @@ const App: React.FC = () => {
         setOpenaiApiKey(savedOpenaiApiKey);
       }
     }
-
-    // IMPORTANT: Directly use the hardcoded API key from .env file
-    // This is a temporary solution for development purposes only
-    // In production, this should be handled more securely
-    const apiKey = 'sk_5f0ee775056bc6685ae206574e0c2c2e2109556ec825b391';
-    
-    console.log('[App] Using hardcoded API key for development');
-    console.log('[App] API key length:', apiKey.length);
-    console.log('[App] API key starts with:', apiKey.substring(0, 5));
-    console.log('[App] API key ends with:', apiKey.substring(apiKey.length - 5));
-    
-    // Set the API key directly and save to localStorage
-    setElevenLabsApiKey(apiKey);
-    localStorage.setItem(ELEVEN_LABS_API_KEY_LOCAL_STORAGE_KEY, apiKey);
   };
 
   useEffect(() => {
@@ -244,7 +258,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     try {
-      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
+      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments, narratorVoiceId: narratorVoiceId || undefined };
       localStorage.setItem(STORY_DATA_LOCAL_STORAGE_KEY, JSON.stringify(storyData));
       if (startSceneId) {
           localStorage.setItem(INITIAL_START_SCENE_ID_KEY, startSceneId);
@@ -255,7 +269,7 @@ const App: React.FC = () => {
       console.warn("localStorage full, continuing without persistent storage:", error);
       // Continue working without storage - don't block the user
     }
-  }, [scenes, connections, startSceneId, voiceAssignments]);
+  }, [scenes, connections, startSceneId, voiceAssignments, narratorVoiceId]);
 
   useEffect(() => {
     try {
@@ -266,37 +280,7 @@ const App: React.FC = () => {
     }
   }, [zoomLevel]);
 
-  const handleSetElevenLabsApiKey = (apiKey: string | null) => {
-    try {
-      if (apiKey) {
-        localStorage.setItem(ELEVEN_LABS_API_KEY_LOCAL_STORAGE_KEY, apiKey);
-        setElevenLabsApiKey(apiKey);
-      } else {
-        localStorage.removeItem(ELEVEN_LABS_API_KEY_LOCAL_STORAGE_KEY);
-        setElevenLabsApiKey(null);
-      }
-    } catch (error) {
-      console.warn("Failed to save ElevenLabs API key, continuing:", error);
-      // Still update state even if localStorage fails
-      setElevenLabsApiKey(apiKey);
-    }
-  };
 
-  const handleSetOpenaiApiKey = (apiKey: string | null) => {
-    try {
-      if (apiKey) {
-        localStorage.setItem(OPENAI_API_KEY_LOCAL_STORAGE_KEY, apiKey);
-        setOpenaiApiKey(apiKey);
-      } else {
-        localStorage.removeItem(OPENAI_API_KEY_LOCAL_STORAGE_KEY);
-        setOpenaiApiKey(null);
-      }
-    } catch (error) {
-      console.warn("Failed to save OpenAI API key, continuing:", error);
-      // Still update state even if localStorage fails
-      setOpenaiApiKey(apiKey);
-    }
-  };
 
   const addScene = () => {
     const newId = generateId();
@@ -314,6 +298,7 @@ const App: React.FC = () => {
       generatedImagePrompt: undefined,
       detectedCharacters: undefined,
       settingContext: undefined,
+      generatedImageId: undefined,
     };
     setScenes(prevScenes => [...prevScenes, newScene]);
     setActiveSceneId(newId);
@@ -427,7 +412,8 @@ const App: React.FC = () => {
       ...s, 
       generatedImagePrompt: s.generatedImagePrompt || undefined,
       detectedCharacters: s.detectedCharacters || undefined,
-      settingContext: s.settingContext || undefined
+      settingContext: s.settingContext || undefined,
+      generatedImageId: s.generatedImageId || undefined,
     })) || []); 
     setConnections(data.connections || []);
     setStartSceneId(data.startSceneId || null);
@@ -481,6 +467,7 @@ const App: React.FC = () => {
         generatedImagePrompt: undefined,
         detectedCharacters: undefined,
         settingContext: undefined,
+        generatedImageId: undefined,
       };
       newScenesToAdd.push(newScene);
 
@@ -528,95 +515,318 @@ const App: React.FC = () => {
       generatedImagePrompt: undefined,
       detectedCharacters: undefined,
       settingContext: undefined,
+      generatedImageId: undefined,
     };
 
     setScenes(prev => [...prev, newTargetScene]);
     addConnection(sourceSceneId, newTargetSceneId, choiceLabel);
   };
 
+  const calculateSceneActualSize = (scene: Scene, connections: Connection[]): { width: number; height: number } => {
+    const baseWidth = scene.width || DEFAULT_SCENE_WIDTH;
+    let calculatedHeight = DEFAULT_SCENE_MIN_HEIGHT;
+    
+    // Header height (title + delete button)
+    calculatedHeight += 40; // ~40px for header
+    
+    // Content height - estimate based on content length
+    if (scene.content) {
+      const contentLines = Math.ceil(scene.content.length / 50); // ~50 chars per line
+      calculatedHeight += Math.max(60, contentLines * 20); // Min 60px, ~20px per line
+    } else {
+      calculatedHeight += 60; // Placeholder height
+    }
+    
+    // Generated image prompt height
+    if (scene.generatedImagePrompt) {
+      const promptLines = Math.ceil(scene.generatedImagePrompt.length / 60);
+      calculatedHeight += 30 + (promptLines * 16); // Header + text lines
+    }
+    
+    // Generated image height
+    if (scene.generatedImageId) {
+      calculatedHeight += 200 + 30; // Max image height + padding/header
+    }
+    
+    // Character analysis height
+    if (scene.detectedCharacters?.length || scene.settingContext) {
+      calculatedHeight += 20; // Base padding
+      
+      if (scene.detectedCharacters?.length) {
+        const characterRows = Math.ceil(scene.detectedCharacters.length / 3); // ~3 tags per row
+        calculatedHeight += 20 + (characterRows * 24); // Header + tag rows
+      }
+      
+      if (scene.settingContext) {
+        const settingLines = Math.ceil(scene.settingContext.length / 50);
+        calculatedHeight += 20 + (settingLines * 16); // Header + text lines
+      }
+    }
+    
+    // Connections/choices height
+    const outgoingConnections = connections.filter(conn => conn.fromSceneId === scene.id);
+    if (outgoingConnections.length > 0) {
+      calculatedHeight += 40; // Header + padding
+      const choiceHeight = Math.min(outgoingConnections.length * 28, 128); // Max 128px (max-h-32)
+      calculatedHeight += choiceHeight;
+    }
+    
+    // Add choice button height
+    calculatedHeight += 40;
+    
+    // Action buttons section (if present)
+    calculatedHeight += 60; // Estimated action buttons section
+    
+    // Add some padding for safety
+    calculatedHeight += 20;
+    
+    return {
+      width: baseWidth,
+      height: Math.max(calculatedHeight, DEFAULT_SCENE_MIN_HEIGHT)
+    };
+  };
+
   const handleOrganizeFlowVertically = () => {
-    if (!startSceneId) {
-      alert("Please set a Start Scene first before organizing the flow.");
+    if (scenes.length === 0) {
+      alert("No scenes to organize.");
       return;
     }
 
-    const sceneMap = new Map(scenes.map(s => [s.id, s]));
-    const adj = new Map<string, string[]>();
-    scenes.forEach(s => adj.set(s.id, []));
-    connections.forEach(c => {
-      if (adj.has(c.fromSceneId)) {
-        adj.get(c.fromSceneId)!.push(c.toSceneId);
-      }
-    });
-
-    const levels = new Map<string, number>();
-    const queue: { id: string, level: number }[] = [{ id: startSceneId, level: 0 }];
-    const visited = new Set<string>();
-    visited.add(startSceneId);
-    levels.set(startSceneId, 0);
-
-    let head = 0;
-    while (head < queue.length) {
-      const { id: currentId, level: currentLevel } = queue[head++];
-      const neighbors = adj.get(currentId) || [];
-      for (const neighborId of neighbors) {
-        if (!sceneMap.has(neighborId)) continue; 
-
-        if (!visited.has(neighborId)) {
-          visited.add(neighborId);
-          levels.set(neighborId, currentLevel + 1);
-          queue.push({ id: neighborId, level: currentLevel + 1 });
-        } else {
-          const existingLevel = levels.get(neighborId)!;
-          if (currentLevel + 1 > existingLevel) {
-            levels.set(neighborId, currentLevel + 1);
-             const queueIndex = queue.slice(head).findIndex(item => item.id === neighborId);
-             if (queueIndex !== -1) { 
-                if(queue[head + queueIndex].level < currentLevel + 1) {
-                    queue[head + queueIndex].level = currentLevel + 1; 
-                }
-             } else {
-                queue.push({ id: neighborId, level: currentLevel + 1 });
-             }
-          }
-        }
-      }
+    // Safety check for very large stories
+    if (scenes.length > 50) {
+      const proceed = confirm(`This story has ${scenes.length} scenes. Organizing very large stories may take some time. Continue?`);
+      if (!proceed) return;
     }
-    
-    const scenesByLevel: Map<number, Scene[]> = new Map();
-    levels.forEach((level, id) => {
-      if (!scenesByLevel.has(level)) scenesByLevel.set(level, []);
-      const scene = sceneMap.get(id);
-      if (scene) scenesByLevel.get(level)!.push(scene);
-    });
-    
-    const maxProcessedLevel = Math.max(0, ...Array.from(scenesByLevel.keys()));
-    let unreachedLevel = maxProcessedLevel + 1;
-    scenes.forEach(s => {
-        if(!levels.has(s.id)) {
-            if(!scenesByLevel.has(unreachedLevel)) scenesByLevel.set(unreachedLevel, []);
-            scenesByLevel.get(unreachedLevel)!.push(s);
-            levels.set(s.id, unreachedLevel); 
-        }
-    });
 
-    const updatedScenes = scenes.map(s => ({ ...s })); 
+    try {
+      // Calculate actual sizes for all scenes with safety limits
+      const sceneActualSizes = new Map<string, { width: number; height: number }>();
+      scenes.forEach(scene => {
+        const calculatedSize = calculateSceneActualSize(scene, connections);
+        // Apply safety limits to prevent excessive sizes
+        const safeSize = {
+          width: Math.min(calculatedSize.width, 400), // Max width limit
+          height: Math.min(calculatedSize.height, 800) // Max height limit
+        };
+        sceneActualSizes.set(scene.id, safeSize);
+      });
 
-    scenesByLevel.forEach((levelScenes, level) => {
-      const levelWidth = levelScenes.reduce((sum, s) => sum + (s.width || DEFAULT_SCENE_WIDTH), 0) + Math.max(0, levelScenes.length - 1) * LAYOUT_HORIZONTAL_GAP;
-      let currentX = Math.max(LAYOUT_SIDE_PADDING, (WORLD_WIDTH - levelWidth) / 2); 
-
-      levelScenes.forEach(sceneInLevel => {
-        const sceneToUpdate = updatedScenes.find(s => s.id === sceneInLevel.id);
-        if (sceneToUpdate) {
-          sceneToUpdate.y = LAYOUT_TOP_PADDING + level * (DEFAULT_SCENE_MIN_HEIGHT + LAYOUT_VERTICAL_GAP);
-          sceneToUpdate.x = currentX;
-          currentX += (sceneToUpdate.width || DEFAULT_SCENE_WIDTH) + LAYOUT_HORIZONTAL_GAP;
+      // Create a map of scenes and adjacency list
+      const sceneMap = new Map(scenes.map(s => [s.id, s]));
+      const adj = new Map<string, string[]>();
+      const inDegree = new Map<string, number>();
+      
+      // Initialize adjacency list and in-degree count
+      scenes.forEach(s => {
+        adj.set(s.id, []);
+        inDegree.set(s.id, 0);
+      });
+      
+      connections.forEach(c => {
+        if (adj.has(c.fromSceneId) && sceneMap.has(c.toSceneId)) {
+          adj.get(c.fromSceneId)!.push(c.toSceneId);
+          inDegree.set(c.toSceneId, (inDegree.get(c.toSceneId) || 0) + 1);
         }
       });
-    });
-    
-    setScenes(updatedScenes);
+
+      // Find root nodes (nodes with no incoming connections)
+      const rootNodes = scenes.filter(s => inDegree.get(s.id) === 0);
+      
+      // If we have a designated start scene, prioritize it
+      let startNodes = rootNodes;
+      if (startSceneId && sceneMap.has(startSceneId)) {
+        startNodes = [sceneMap.get(startSceneId)!];
+        // Add other root nodes that aren't the start scene
+        rootNodes.forEach(node => {
+          if (node.id !== startSceneId) {
+            startNodes.push(node);
+          }
+        });
+      }
+
+      // Perform level-based layout using BFS with cycle detection
+      const levels = new Map<string, number>();
+      const queue: { id: string, level: number }[] = [];
+      const visited = new Set<string>();
+      const processing = new Set<string>(); // For cycle detection
+
+      // Start with root nodes at level 0
+      startNodes.forEach(node => {
+        if (!visited.has(node.id)) {
+          queue.push({ id: node.id, level: 0 });
+          visited.add(node.id);
+          levels.set(node.id, 0);
+        }
+      });
+
+      // BFS to assign levels with safety counter
+      let iterations = 0;
+      const maxIterations = scenes.length * scenes.length; // Safety limit
+
+      while (queue.length > 0 && iterations < maxIterations) {
+        iterations++;
+        const { id: currentId, level: currentLevel } = queue.shift()!;
+        
+        // Cycle detection
+        if (processing.has(currentId)) {
+          console.warn(`Cycle detected at scene ${currentId}, skipping`);
+          continue;
+        }
+        processing.add(currentId);
+        
+        const neighbors = adj.get(currentId) || [];
+        
+        for (const neighborId of neighbors) {
+          if (!sceneMap.has(neighborId)) continue;
+          
+          const newLevel = currentLevel + 1;
+          
+          // Prevent excessive nesting levels
+          if (newLevel > 20) {
+            console.warn(`Maximum nesting level reached for scene ${neighborId}`);
+            continue;
+          }
+          
+          if (!visited.has(neighborId)) {
+            visited.add(neighborId);
+            levels.set(neighborId, newLevel);
+            queue.push({ id: neighborId, level: newLevel });
+          } else {
+            // If already visited, update level if this path is longer
+            const existingLevel = levels.get(neighborId)!;
+            if (newLevel > existingLevel) {
+              levels.set(neighborId, newLevel);
+              // Re-queue to update its children
+              queue.push({ id: neighborId, level: newLevel });
+            }
+          }
+        }
+        
+        processing.delete(currentId);
+      }
+
+      if (iterations >= maxIterations) {
+        console.warn('Flow organization reached maximum iterations, some scenes may not be properly positioned');
+      }
+
+      // Handle any unconnected scenes
+      scenes.forEach(s => {
+        if (!levels.has(s.id)) {
+          levels.set(s.id, 0);
+        }
+      });
+
+      // Group scenes by level
+      const scenesByLevel = new Map<number, Scene[]>();
+      levels.forEach((level, id) => {
+        if (!scenesByLevel.has(level)) {
+          scenesByLevel.set(level, []);
+        }
+        const scene = sceneMap.get(id);
+        if (scene) {
+          scenesByLevel.get(level)!.push(scene);
+        }
+      });
+
+      // Calculate layout dimensions using actual scene sizes with safety checks
+      const maxLevel = Math.max(...Array.from(scenesByLevel.keys()));
+      const totalLevels = maxLevel + 1;
+      
+      // Calculate optimal spacing with safety limits
+      const availableWidth = WORLD_WIDTH - (2 * LAYOUT_SIDE_PADDING);
+      const availableHeight = WORLD_HEIGHT - (2 * LAYOUT_TOP_PADDING);
+      
+      // Find the level with the most total width to determine horizontal spacing
+      let maxLevelWidth = 0;
+      scenesByLevel.forEach((levelScenes) => {
+        const levelWidth = levelScenes.reduce((sum, s) => {
+          const actualSize = sceneActualSizes.get(s.id)!;
+          return sum + actualSize.width;
+        }, 0);
+        maxLevelWidth = Math.max(maxLevelWidth, levelWidth);
+      });
+      
+      // Always use the defined horizontal gap, don't reduce it
+      const horizontalSpacing = LAYOUT_HORIZONTAL_GAP;
+      
+      // Calculate vertical spacing based on actual heights with safety limits
+      const totalContentHeight = Array.from(scenesByLevel.entries()).reduce((sum, [, levelScenes]) => {
+        const maxHeightInLevel = Math.max(...levelScenes.map(s => sceneActualSizes.get(s.id)!.height));
+        return sum + Math.min(maxHeightInLevel, 800); // Apply height limit
+      }, 0);
+      
+      // Always use the defined vertical gap, don't reduce it
+      const verticalSpacing = LAYOUT_VERTICAL_GAP;
+
+      // Position scenes using actual dimensions
+      const updatedScenes = scenes.map(s => ({ ...s }));
+      let currentY = LAYOUT_TOP_PADDING;
+
+      scenesByLevel.forEach((levelScenes) => {
+        // Sort scenes in each level for consistent ordering
+        levelScenes.sort((a, b) => {
+          // Prioritize start scene at the beginning
+          if (a.id === startSceneId) return -1;
+          if (b.id === startSceneId) return 1;
+          // Then sort by title or id
+          return (a.title || a.id).localeCompare(b.title || b.id);
+        });
+
+        // Calculate total width needed for this level using actual sizes
+        const totalSceneWidth = levelScenes.reduce((sum, s) => {
+          const actualSize = sceneActualSizes.get(s.id)!;
+          return sum + actualSize.width;
+        }, 0);
+        const totalGapWidth = Math.max(0, levelScenes.length - 1) * horizontalSpacing;
+        const levelWidth = totalSceneWidth + totalGapWidth;
+        
+        // Center the level horizontally
+        let currentX = LAYOUT_SIDE_PADDING + Math.max(0, (availableWidth - levelWidth) / 2);
+        
+        // Find the maximum height in this level for consistent Y positioning
+        const maxHeightInLevel = Math.max(...levelScenes.map(s => sceneActualSizes.get(s.id)!.height));
+
+        levelScenes.forEach(sceneInLevel => {
+          const sceneToUpdate = updatedScenes.find(s => s.id === sceneInLevel.id);
+          const actualSize = sceneActualSizes.get(sceneInLevel.id)!;
+          
+          if (sceneToUpdate) {
+            sceneToUpdate.x = currentX;
+            sceneToUpdate.y = currentY;
+            // Update the scene's stored dimensions to match calculated size
+            sceneToUpdate.width = actualSize.width;
+            sceneToUpdate.height = actualSize.height;
+            
+            currentX += actualSize.width + horizontalSpacing;
+          }
+        });
+        
+        // Move to next level with extra buffer to ensure no overlap
+        currentY += maxHeightInLevel + verticalSpacing + 50; // Added 50px extra buffer
+      });
+
+      // Force a complete re-render by updating scenes
+      setScenes([...updatedScenes]);
+      
+      // Reset zoom to show all scenes properly
+      setZoomLevel(DEFAULT_ZOOM);
+      
+      // Force connections to re-render by triggering a state update
+      setConnections(prevConnections => [...prevConnections]);
+      
+      // Scroll to top-left of canvas after organization
+      setTimeout(() => {
+        const canvasViewport = document.querySelector('.canvas-bg');
+        if (canvasViewport) {
+          canvasViewport.scrollTo(0, 0);
+        }
+        alert('Flow organized successfully! All scenes are now properly arranged.');
+      }, 100);
+      
+    } catch (error) {
+      console.error('Error during flow organization:', error);
+      alert('An error occurred while organizing the flow. Please check the console for details.');
+    }
   };
 
   const handlePlayStory = () => {
@@ -628,11 +838,17 @@ const App: React.FC = () => {
   };
 
   const handleClosePlayModal = () => setIsPlaying(false);
-  const handleOpenSettings = () => setIsSettingsModalOpen(true);
-  const handleCloseSettings = () => setIsSettingsModalOpen(false);
+
+
   
   const handleSaveVoiceAssignments = (assignments: VoiceAssignment[]) => {
+    console.log(`[App] ✅ Receiving voice assignments:`, assignments.map(a => ({
+      name: a.characterName,
+      imageId: a.imageId,
+      voiceId: a.voiceId
+    })));
     setVoiceAssignments(assignments);
+    console.log(`[App] ✅ Voice assignments updated in main state`);
   };
 
   const generateImagePrompts = async () => {
@@ -716,6 +932,14 @@ const App: React.FC = () => {
   const generateSceneImageForScene = async (sceneId: string) => {
     console.log(`[App] generateSceneImageForScene called for scene ID: ${sceneId}`);
     
+    // Prevent multiple simultaneous generations - clear any existing generation
+    if (generatingImageForScene && generatingImageForScene !== sceneId) {
+      console.log(`[App] Stopping previous image generation for scene: ${generatingImageForScene}`);
+      setGeneratingImageForScene(null);
+      // Add a small delay to ensure state is updated
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
     const scene = scenes.find(s => s.id === sceneId);
     if (!scene) {
       console.error('[App] Scene not found for ID:', sceneId);
@@ -747,31 +971,69 @@ const App: React.FC = () => {
     try {
       console.log(`[App] Generating image for scene: ${scene.title}`);
       
-      // Step 1: Enhance prompt with location consistency
+      // Step 1: Analyze scene sequence and get generation strategy
       const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
-      const enhancedPrompt = await enhancePromptWithLocationConsistency(
-        scene.generatedImagePrompt,
-        scene,
-        storyData
-      );
+      const generationStrategy = getImageGenerationStrategy(scene, storyData);
       
-      console.log(`[App] Enhanced prompt with location consistency: ${enhancedPrompt.substring(0, 200)}...`);
+      console.log(`[App] Generation strategy:`, {
+        strategy: generationStrategy.strategy,
+        sequenceType: generationStrategy.sequenceInfo.sequenceType,
+        isSameLocation: generationStrategy.sequenceInfo.isSameLocation,
+        hasBaseImage: !!generationStrategy.baseImageId
+      });
       
-      // Step 2: Generate the image using the enhanced prompt
-      const result = await generateSceneImageWithCharacterReferences(
-        enhancedPrompt,
-        scene.detectedCharacters || [],
-        voiceAssignments,
-        openaiApiKey
-      );
+      // Step 2: Use the enhanced prompt from the strategy
+      const enhancedPrompt = generationStrategy.enhancedPrompt;
+      console.log(`[App] Enhanced prompt: ${enhancedPrompt.substring(0, 200)}...`);
+      
+      // Step 3: Debug character detection and voice assignments
+      console.log(`[App] DEBUG - Scene characters:`, scene.detectedCharacters);
+      console.log(`[App] DEBUG - Voice assignments:`, voiceAssignments.map(va => ({
+        name: va.characterName,
+        hasImageId: !!va.imageId,
+        imageId: va.imageId
+      })));
+      
+      // Check for character name matching issues
+      if (scene.detectedCharacters) {
+        scene.detectedCharacters.forEach(charName => {
+          const assignment = voiceAssignments.find(va => va.characterName === charName);
+          console.log(`[App] DEBUG - Character "${charName}" -> Assignment:`, {
+            found: !!assignment,
+            hasImageId: !!assignment?.imageId,
+            imageId: assignment?.imageId
+          });
+        });
+      }
+      
+      // Step 4: Generate the image using the appropriate strategy
+      let result;
+      if (generationStrategy.strategy === 'image_to_image' && generationStrategy.baseImageId) {
+        // TODO: Implement image-to-image generation when available
+        console.log(`[App] Image-to-image generation requested but not yet implemented. Falling back to text-to-image.`);
+        result = await generateSceneImageWithCharacterReferences(
+          enhancedPrompt,
+          scene.detectedCharacters || [],
+          voiceAssignments,
+          openaiApiKey
+        );
+      } else {
+        // Standard text-to-image generation
+        result = await generateSceneImageWithCharacterReferences(
+          enhancedPrompt,
+          scene.detectedCharacters || [],
+          voiceAssignments,
+          openaiApiKey
+        );
+      }
 
       if (result.success && result.imageUrl) {
-        // Step 3: Save image using the new file storage system
+        // Step 4: Save image using the new file storage system
         const imageId = await saveGeneratedImage(result.imageUrl, sceneId);
         
         if (imageId) {
-          // Step 4: Update scene with location information if this is the first image for this location
-          const locationKey = scene.locationKey || extractLocationKey(scene);
+          // Step 5: Update scene with location information
+          const locationKey = generationStrategy.sequenceInfo.locationKey || extractLocationKey(scene);
           let updatedScene: Partial<Omit<Scene, 'id'>> = { generatedImageId: imageId };
           
           if (locationKey) {
@@ -790,15 +1052,15 @@ const App: React.FC = () => {
               console.log(`[App] Set as base location image for location: ${locationKey}`);
             } else {
               // Just add the location key for consistency tracking
-              updatedScene = { generatedImageId: imageId, locationKey };
+              updatedScene = { generatedImageId: imageId, locationKey: locationKey };
             }
           }
           
-          // Step 5: Update the scene with all the new information
+          // Step 6: Update the scene with all the new information
           updateScene(sceneId, updatedScene);
           console.log(`[App] Successfully generated and saved image for scene: ${scene.title} (ID: ${imageId})`);
           
-          // Step 6: Update story data with location keys for future consistency
+          // Step 7: Update story data with location keys for future consistency
           setScenes(prevScenes => {
             const currentStoryData = { ...storyData, scenes: prevScenes };
             const updatedStoryData = updateStoryWithLocationKeys(currentStoryData);
@@ -820,6 +1082,831 @@ const App: React.FC = () => {
     }
   };
 
+  const generateAllSceneImages = async () => {
+    if (!openaiApiKey) {
+      alert('Please set your OpenAI API key in the settings first');
+      return;
+    }
+
+    // Check if scenes have image prompts
+    const scenesWithoutPrompts = scenes.filter(scene => !scene.generatedImagePrompt);
+    if (scenesWithoutPrompts.length > 0) {
+      const shouldContinue = confirm(
+        `${scenesWithoutPrompts.length} scenes don't have image prompts yet. ` +
+        `Would you like to generate prompts for all scenes first?`
+      );
+      
+      if (shouldContinue) {
+        await generateImagePrompts();
+        // Wait a moment for state to update
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        return;
+      }
+    }
+
+    // Get scenes that need images (have prompts but no generated images)
+    const scenesToGenerate = scenes.filter(scene => 
+      scene.generatedImagePrompt && !scene.generatedImageId
+    );
+
+    if (scenesToGenerate.length === 0) {
+      alert('All scenes already have images generated!');
+      return;
+    }
+
+    const shouldProceed = confirm(
+      `This will generate images for ${scenesToGenerate.length} scenes. ` +
+      `This may take several minutes and will use your OpenAI API credits. Continue?`
+    );
+
+    if (!shouldProceed) return;
+
+    setIsBulkGeneratingImages(true);
+    setBulkImageProgress(0);
+
+    try {
+      console.log(`[App] Starting bulk image generation for ${scenesToGenerate.length} scenes`);
+      
+      for (let i = 0; i < scenesToGenerate.length; i++) {
+        const scene = scenesToGenerate[i];
+        console.log(`[App] Generating image ${i + 1}/${scenesToGenerate.length} for scene: ${scene.title}`);
+        
+        try {
+          // Use the existing generateSceneImageForScene function
+          await generateSceneImageForScene(scene.id);
+          
+          // Update progress
+          setBulkImageProgress(Math.round(((i + 1) / scenesToGenerate.length) * 100));
+          
+          // Add delay between generations to avoid rate limiting
+          if (i < scenesToGenerate.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+          
+        } catch (error) {
+          console.error(`[App] Error generating image for scene ${scene.title}:`, error);
+          // Continue with next scene even if one fails
+        }
+      }
+      
+      console.log('[App] Bulk image generation completed');
+      alert(`Successfully generated images for ${scenesToGenerate.length} scenes!`);
+      
+    } catch (error) {
+      console.error('[App] Error in bulk image generation:', error);
+      alert(`Error during bulk image generation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsBulkGeneratingImages(false);
+      setBulkImageProgress(0);
+    }
+  };
+
+  // Function to migrate existing beats to use speaker annotations
+  const handleMigrateBeats = async () => {
+    setIsMigratingBeats(true);
+    
+    try {
+      console.log('🔄 Starting beat migration...');
+      
+      let totalBeatsUpdated = 0;
+      const updatedScenes = scenes.map(scene => {
+        if (scene.beats && scene.beats.length > 0) {
+          const beatsNeedingMigration = BeatMigrationService.countBeatsNeedingMigration(scene.beats);
+          
+          if (beatsNeedingMigration > 0) {
+            console.log(`📝 Migrating ${beatsNeedingMigration} beats in scene "${scene.title}"`);
+            const migratedBeats = BeatMigrationService.migrateSceneBeats(scene.beats);
+            totalBeatsUpdated += beatsNeedingMigration;
+            
+            return {
+              ...scene,
+              beats: migratedBeats
+            };
+          }
+        }
+        return scene;
+      });
+      
+      if (totalBeatsUpdated > 0) {
+        setScenes(updatedScenes);
+        console.log(`✅ Migration complete! Updated ${totalBeatsUpdated} beats.`);
+        alert(`Beat migration completed successfully!\n\n${totalBeatsUpdated} beats were updated with speaker annotations.\n\nYour beats now use the format [Speaker] for better voice assignment.`);
+      } else {
+        console.log('ℹ️ No beats needed migration.');
+        alert('No beats needed migration.\n\nAll your beats already have speaker annotations or no beats were found.');
+      }
+      
+    } catch (error) {
+      console.error('❌ Error during beat migration:', error);
+      alert(`Error during beat migration: ${error instanceof Error ? error.message : 'Unknown error'}\n\nPlease try again or check the console for details.`);
+    } finally {
+      setIsMigratingBeats(false);
+    }
+  };
+
+  // Function to gather story context from previous scenes
+  const gatherStoryContext = (currentSceneId: string): string => {
+    const visited = new Set<string>();
+    const storyPath: string[] = [];
+    
+    // Find path from start scene to current scene
+    const findPath = (sceneId: string, path: string[]): boolean => {
+      if (visited.has(sceneId)) return false;
+      visited.add(sceneId);
+      
+      const scene = scenes.find(s => s.id === sceneId);
+      if (!scene) return false;
+      
+      path.push(scene.content);
+      
+      if (sceneId === currentSceneId) {
+        storyPath.push(...path);
+        return true;
+      }
+      
+      // Find connections leading to this scene
+      const incomingConnections = connections.filter(conn => conn.toSceneId === sceneId);
+      
+      for (const connection of incomingConnections) {
+        if (findPath(connection.fromSceneId, [...path])) {
+          return true;
+        }
+      }
+      
+      return false;
+    };
+    
+    // Start from the start scene if it exists
+    if (startSceneId && startSceneId !== currentSceneId) {
+      findPath(startSceneId, []);
+    }
+    
+    // If no path found or no start scene, try to find any path to current scene
+    if (storyPath.length === 0) {
+      const currentScene = scenes.find(s => s.id === currentSceneId);
+      if (currentScene) {
+        // Get all scenes that lead to current scene
+        const getParentScenes = (sceneId: string, depth = 0): string[] => {
+          if (depth > 10) return []; // Prevent infinite recursion
+          
+          const parentConnections = connections.filter(conn => conn.toSceneId === sceneId);
+          const parentTexts: string[] = [];
+          
+          for (const connection of parentConnections) {
+            const parentScene = scenes.find(s => s.id === connection.fromSceneId);
+            if (parentScene && !visited.has(parentScene.id)) {
+              visited.add(parentScene.id);
+              const grandParentTexts = getParentScenes(parentScene.id, depth + 1);
+              parentTexts.push(...grandParentTexts, parentScene.content);
+            }
+          }
+          
+          return parentTexts;
+        };
+        
+        visited.clear();
+        const parentTexts = getParentScenes(currentSceneId);
+        storyPath.push(...parentTexts);
+      }
+    }
+    
+    // Add current scene content
+    const currentScene = scenes.find(s => s.id === currentSceneId);
+    if (currentScene) {
+      storyPath.push(currentScene.content);
+    }
+    
+    return storyPath.join('\n\n');
+  };
+
+  // AI Story Continuation Handlers
+  const handleContinueWithAI = async (sceneId: string) => {
+    console.log('[App] handleContinueWithAI called with sceneId:', sceneId);
+    console.log(`[App] AI continuation requested for scene: ${sceneId}`);
+    setGeneratingContinuationForScene(sceneId);
+    
+    try {
+      // Get the current scene
+      const currentScene = scenes.find(s => s.id === sceneId);
+      if (!currentScene) {
+        throw new Error('Scene not found');
+      }
+      const storyContext = gatherStoryContext(sceneId);
+      console.log('[App] Story context gathered:', storyContext);
+
+      // Use AI story service for real AI generation
+      const aiResponse = await aiStoryService.generateStoryContinuation({
+        storyContext,
+        currentScene: currentScene?.content || '',
+        numberOfChoices: 0
+      });
+      const aiGeneratedContent = aiResponse.content;
+      
+      // Create new scene with AI-generated content
+      const newSceneId = generateId();
+      const newScene: Scene = {
+        id: newSceneId,
+        title: `AI Continuation from ${currentScene.title}`,
+        content: aiGeneratedContent,
+        x: currentScene.x + 350, // Position to the right of current scene
+        y: currentScene.y,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      // Add the new scene
+      setScenes(prevScenes => [...prevScenes, newScene]);
+
+      // Create connection from current scene to new scene
+      const connectionId = generateId();
+      const newConnection: Connection = {
+        id: connectionId,
+        fromSceneId: sceneId,
+        toSceneId: newSceneId,
+        label: 'Continue'
+      };
+
+      // Add the connection
+      setConnections(prevConnections => [...prevConnections, newConnection]);
+
+      console.log(`[App] AI continuation generated for scene: ${sceneId}, created new scene: ${newSceneId}`);
+    } catch (error) {
+      console.error('[App] Error generating AI continuation:', error);
+      alert(`Error generating AI continuation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingContinuationForScene(null);
+    }
+  };
+
+  const handleContinueWithAI2Options = async (sceneId: string) => {
+    console.log('[App] handleContinueWithAI2Options called with sceneId:', sceneId);
+    console.log(`[App] AI continuation with 2 options requested for scene: ${sceneId}`);
+    setGeneratingContinuationForScene(sceneId);
+    
+    try {
+      const currentScene = scenes.find(s => s.id === sceneId);
+      if (!currentScene) {
+        throw new Error('Scene not found');
+      }
+
+      // Gather story context from previous scenes
+      const storyContext = gatherStoryContext(sceneId);
+      console.log('[App] Story context gathered for 2 options:', storyContext);
+
+      // Use AI story service for real AI generation
+      const aiResponse = await aiStoryService.generateStoryContinuation({
+        storyContext,
+        currentScene: currentScene?.content || '',
+        numberOfChoices: 2
+      });
+      const aiGeneratedContent = aiResponse.content;
+      const aiChoices = aiResponse.choices;
+      
+      // Create main continuation scene
+      const mainSceneId = generateId();
+      const mainScene: Scene = {
+        id: mainSceneId,
+        title: `AI Story: ${currentScene.title} Continues`,
+        content: aiGeneratedContent,
+        x: currentScene.x + 350,
+        y: currentScene.y,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      // Create two choice scenes
+      const choice1Id = generateId();
+      const choice1Scene: Scene = {
+        id: choice1Id,
+        title: 'AI Choice 1',
+        content: aiChoices?.[0] || 'Continue with the first option...',
+        x: currentScene.x + 700,
+        y: currentScene.y - 200,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      const choice2Id = generateId();
+      const choice2Scene: Scene = {
+        id: choice2Id,
+        title: 'AI Choice 2',
+        content: aiChoices?.[1] || 'Continue with the second option...',
+        x: currentScene.x + 700,
+        y: currentScene.y + 200,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      // Add all scenes
+      setScenes(prevScenes => [...prevScenes, mainScene, choice1Scene, choice2Scene]);
+
+      // Create connections
+      const connections: Connection[] = [
+        {
+          id: generateId(),
+          fromSceneId: sceneId,
+          toSceneId: mainSceneId,
+          label: 'Continue'
+        },
+        {
+          id: generateId(),
+          fromSceneId: mainSceneId,
+          toSceneId: choice1Id,
+          label: 'Choose path 1'
+        },
+        {
+          id: generateId(),
+          fromSceneId: mainSceneId,
+          toSceneId: choice2Id,
+          label: 'Choose path 2'
+        }
+      ];
+
+      setConnections(prevConnections => [...prevConnections, ...connections]);
+
+      console.log(`[App] AI continuation with 2 options generated for scene: ${sceneId}`);
+    } catch (error) {
+      console.error('[App] Error generating AI continuation with 2 options:', error);
+      alert(`Error generating AI continuation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingContinuationForScene(null);
+    }
+  };
+
+  const handleContinueWithAI3Options = async (sceneId: string) => {
+    console.log('[App] handleContinueWithAI3Options called with sceneId:', sceneId);
+    console.log(`[App] AI continuation with 3 options requested for scene: ${sceneId}`);
+    setGeneratingContinuationForScene(sceneId);
+    
+    try {
+      const currentScene = scenes.find(s => s.id === sceneId);
+      if (!currentScene) {
+        throw new Error('Scene not found');
+      }
+
+      // Gather story context from previous scenes
+      const storyContext = gatherStoryContext(sceneId);
+      console.log('[App] Story context gathered for 3 options:', storyContext);
+
+      // Use AI story service for real AI generation
+      const aiResponse = await aiStoryService.generateStoryContinuation({
+        storyContext,
+        currentScene: currentScene?.content || '',
+        numberOfChoices: 3
+      });
+      const aiGeneratedContent = aiResponse.content;
+      const aiChoices = aiResponse.choices;
+      
+      // Create main continuation scene
+      const mainSceneId = generateId();
+      const mainScene: Scene = {
+        id: mainSceneId,
+        title: `AI Story: ${currentScene.title} Develops`,
+        content: aiGeneratedContent,
+        x: currentScene.x + 350,
+        y: currentScene.y,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      // Create three choice scenes
+      const choice1Id = generateId();
+      const choice1Scene: Scene = {
+        id: choice1Id,
+        title: 'AI Choice 1',
+        content: aiChoices?.[0] || 'Continue with the first option...',
+        x: currentScene.x + 700,
+        y: currentScene.y - 200,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      const choice2Id = generateId();
+      const choice2Scene: Scene = {
+        id: choice2Id,
+        title: 'AI Choice 2',
+        content: aiChoices?.[1] || 'Continue with the second option...',
+        x: currentScene.x + 700,
+        y: currentScene.y,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      const choice3Id = generateId();
+      const choice3Scene: Scene = {
+        id: choice3Id,
+        title: 'AI Choice 3',
+        content: aiChoices?.[2] || 'Continue with the third option...',
+        x: currentScene.x + 700,
+        y: currentScene.y + 200,
+        width: DEFAULT_SCENE_WIDTH,
+        height: DEFAULT_SCENE_MIN_HEIGHT,
+        detectedCharacters: [],
+        settingContext: currentScene.settingContext || '',
+        generatedImagePrompt: '',
+        generatedImageId: undefined,
+        locationKey: currentScene.locationKey || undefined,
+        baseLocationImageId: currentScene.baseLocationImageId || undefined
+      };
+
+      // Add all scenes
+      setScenes(prevScenes => [...prevScenes, mainScene, choice1Scene, choice2Scene, choice3Scene]);
+
+      // Create connections
+      const connections: Connection[] = [
+        {
+          id: generateId(),
+          fromSceneId: sceneId,
+          toSceneId: mainSceneId,
+          label: 'Continue'
+        },
+        {
+          id: generateId(),
+          fromSceneId: mainSceneId,
+          toSceneId: choice1Id,
+          label: 'Choose path 1'
+        },
+        {
+          id: generateId(),
+          fromSceneId: mainSceneId,
+          toSceneId: choice2Id,
+          label: 'Choose path 2'
+        },
+        {
+          id: generateId(),
+          fromSceneId: mainSceneId,
+          toSceneId: choice3Id,
+          label: 'Choose path 3'
+        }
+      ];
+
+      setConnections(prevConnections => [...prevConnections, ...connections]);
+
+      console.log(`[App] AI continuation with 3 options generated for scene: ${sceneId}`);
+    } catch (error) {
+      console.error('[App] Error generating AI continuation with 3 options:', error);
+      alert(`Error generating AI continuation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingContinuationForScene(null);
+    }
+  };
+
+  // Text Rewrite Handler
+  const handleRewriteText = async (sceneId: string, level: LanguageLevel) => {
+    console.log(`[App] Rewriting text for scene ${sceneId} at level ${level}`);
+    setRewritingTextForScene(sceneId);
+    
+    try {
+      // Check if OpenAI API key is set
+      if (!openaiApiKey) {
+        throw new Error('OpenAI API key is not set. Please configure it in Settings.');
+      }
+      
+      // Get the current scene
+      const currentScene = scenes.find(s => s.id === sceneId);
+      if (!currentScene) {
+        throw new Error('Scene not found');
+      }
+      
+      // Gather story context up to this scene
+      const storyContext = gatherStoryContext(sceneId);
+      
+      // Call the rewrite service
+      const result = await textRewriteService.rewriteSceneText(
+        currentScene.content,
+        level,
+        storyContext,
+        openaiApiKey
+      );
+      
+      if (result.success && result.rewrittenText) {
+        // Update the scene with the rewritten text
+        updateScene(sceneId, { content: result.rewrittenText });
+        console.log(`[App] Successfully rewrote text for scene ${sceneId}`);
+      } else {
+        throw new Error(result.error || 'Failed to rewrite text');
+      }
+    } catch (error) {
+      console.error('[App] Error rewriting text:', error);
+      alert(`Error rewriting text: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setRewritingTextForScene(null);
+    }
+  };
+
+  // Beat subdivision functionality
+  const handleSubdivideIntoBeats = async (sceneId: string) => {
+    if (!openaiApiKey) {
+      alert('OpenAI API key is required for beat subdivision. Please set it in the settings.');
+      return;
+    }
+
+    const currentScene = scenes.find(s => s.id === sceneId);
+    if (!currentScene) {
+      console.error('[App] Scene not found for beat subdivision:', sceneId);
+      return;
+    }
+
+    if (!currentScene.content.trim()) {
+      alert('Scene content is empty. Please add some content before subdividing into beats.');
+      return;
+    }
+
+    setSubdividingSceneIntoBeats(sceneId);
+    console.log(`[App] Starting beat subdivision for scene ${sceneId}`);
+
+    try {
+      const storyContext = gatherStoryContext(sceneId);
+      
+      const result = await beatSubdivisionService.subdivideSceneIntoBeats(
+        {
+          sceneContent: currentScene.content,
+          sceneTitle: currentScene.title,
+          storyContext,
+          detectedCharacters: currentScene.detectedCharacters
+        },
+        openaiApiKey
+      );
+      
+      if (result.success && result.beats) {
+        // Update the scene with beats
+        updateScene(sceneId, { 
+          beats: result.beats,
+          isSubdivided: true
+        });
+        console.log(`[App] Successfully subdivided scene ${sceneId} into ${result.beats.length} beats`);
+        alert(`Scene successfully subdivided into ${result.beats.length} narrative beats!`);
+      } else {
+        throw new Error(result.error || 'Failed to subdivide scene into beats');
+      }
+    } catch (error) {
+      console.error('[App] Error subdividing scene into beats:', error);
+      alert(`Error subdividing scene: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setSubdividingSceneIntoBeats(null);
+    }
+  };
+
+  // Beat image generation functionality
+  const handleGenerateBeatImage = async (sceneId: string, beatId: string) => {
+    if (!openaiApiKey) {
+      alert('OpenAI API key is required for image generation. Please set it in the settings.');
+      return;
+    }
+
+    const currentScene = scenes.find(s => s.id === sceneId);
+    if (!currentScene || !currentScene.beats) {
+      console.error('[App] Scene or beats not found for image generation:', sceneId, beatId);
+      return;
+    }
+
+    const beat = currentScene.beats.find(b => b.id === beatId);
+    if (!beat) {
+      console.error('[App] Beat not found for image generation:', beatId);
+      return;
+    }
+
+    if (!beat.imagePrompt) {
+      alert('No image prompt available for this beat.');
+      return;
+    }
+
+    setGeneratingBeatImageFor({ sceneId, beatId });
+    console.log(`[App] Starting image generation for beat ${beatId} in scene ${sceneId}`);
+
+    try {
+      const imageResult = await generateSceneImageWithCharacterReferences(
+        beat.imagePrompt,
+        currentScene.detectedCharacters || [],
+        voiceAssignments,
+        openaiApiKey
+      );
+
+      if (imageResult.success && imageResult.imageUrl) {
+        // Save the image
+        const imageId = await saveGeneratedImage(imageResult.imageUrl, `beat_${beatId}_image`);
+        
+        // Update the beat with the generated image
+        const updatedBeats = currentScene.beats.map(b => 
+          b.id === beatId ? { ...b, imageId } : b
+        );
+        
+        updateScene(sceneId, { beats: updatedBeats });
+        console.log(`[App] Successfully generated image for beat ${beatId}`);
+      } else {
+        throw new Error(imageResult.error || 'Failed to generate beat image');
+      }
+    } catch (error) {
+      console.error('[App] Error generating beat image:', error);
+      alert(`Error generating beat image: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingBeatImageFor(null);
+    }
+  };
+
+  // Bulk beat image generation functionality
+  const handleGenerateAllBeatImages = async (sceneId: string) => {
+    if (!openaiApiKey) {
+      alert('OpenAI API key is required for image generation. Please set it in the settings.');
+      return;
+    }
+
+    const currentScene = scenes.find(s => s.id === sceneId);
+    if (!currentScene || !currentScene.beats) {
+      console.error('[App] Scene or beats not found for bulk image generation:', sceneId);
+      return;
+    }
+
+    // Debug: Log all beats and their status
+    console.log(`[App] Debug - Scene has ${currentScene.beats.length} beats:`);
+    currentScene.beats.forEach((beat, index) => {
+      console.log(`[App] Beat ${index + 1}:`, {
+        id: beat.id,
+        hasImagePrompt: !!beat.imagePrompt,
+        hasImageId: !!beat.imageId,
+        imagePrompt: beat.imagePrompt ? beat.imagePrompt.substring(0, 50) + '...' : 'None'
+      });
+    });
+
+    // Filter beats that need images (have imagePrompt but no imageId)
+    const beatsNeedingImages = currentScene.beats.filter(beat => 
+      beat.imagePrompt && !beat.imageId
+    );
+
+    // Also check for beats that have imagePrompt but empty/undefined imageId
+    const beatsWithPromptNoImage = currentScene.beats.filter(beat => 
+      beat.imagePrompt && (!beat.imageId || beat.imageId.trim() === '')
+    );
+
+    console.log(`[App] Beats needing images (strict): ${beatsNeedingImages.length}`);
+    console.log(`[App] Beats with prompts but no images (flexible): ${beatsWithPromptNoImage.length}`);
+
+    const finalBeatsToProcess = beatsWithPromptNoImage.length > 0 ? beatsWithPromptNoImage : beatsNeedingImages;
+
+    if (finalBeatsToProcess.length === 0) {
+      const totalBeats = currentScene.beats.length;
+      const beatsWithPrompts = currentScene.beats.filter(beat => beat.imagePrompt).length;
+      const beatsWithImages = currentScene.beats.filter(beat => beat.imageId).length;
+      
+      alert(`Debug Info:\n` +
+            `Total beats: ${totalBeats}\n` +
+            `Beats with image prompts: ${beatsWithPrompts}\n` +
+            `Beats with images: ${beatsWithImages}\n\n` +
+            `All beats already have images or no image prompts available.`);
+      return;
+    }
+
+    console.log(`[App] Starting bulk image generation for ${finalBeatsToProcess.length} beats in scene ${sceneId}`);
+    
+    // Set bulk generation state
+    setGeneratingBeatImageFor({ sceneId, beatId: 'bulk' });
+    
+    let successCount = 0;
+    let errorCount = 0;
+
+    try {
+      for (let i = 0; i < finalBeatsToProcess.length; i++) {
+        const beat = finalBeatsToProcess[i];
+        console.log(`[App] Generating image for beat ${i + 1}/${finalBeatsToProcess.length}: ${beat.id}`);
+
+        try {
+          const imageResult = await generateSceneImageWithCharacterReferences(
+            beat.imagePrompt!,
+            currentScene.detectedCharacters || [],
+            voiceAssignments,
+            openaiApiKey
+          );
+
+          if (imageResult.success && imageResult.imageUrl) {
+            // Save the image
+            const imageId = await saveGeneratedImage(imageResult.imageUrl, `beat_${beat.id}_image`);
+            
+            if (imageId) {
+              // Update the beat with the generated image
+              setScenes(prevScenes => 
+                prevScenes.map(scene => {
+                  if (scene.id === sceneId && scene.beats) {
+                    const updatedBeats = scene.beats.map(b => 
+                      b.id === beat.id ? { ...b, imageId } : b
+                    );
+                    return { ...scene, beats: updatedBeats };
+                  }
+                  return scene;
+                })
+              );
+              
+              successCount++;
+              console.log(`[App] Successfully generated image for beat ${beat.id} (${i + 1}/${finalBeatsToProcess.length})`);
+            } else {
+              throw new Error('Failed to save generated image');
+            }
+          } else {
+            throw new Error(imageResult.error || 'Failed to generate beat image');
+          }
+        } catch (beatError) {
+          console.error(`[App] Error generating image for beat ${beat.id}:`, beatError);
+          errorCount++;
+        }
+
+        // Add a small delay between requests to avoid rate limiting
+        if (i < finalBeatsToProcess.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      // Show completion message
+      if (successCount > 0 && errorCount === 0) {
+        alert(`Successfully generated images for all ${successCount} beats!`);
+      } else if (successCount > 0 && errorCount > 0) {
+        alert(`Generated images for ${successCount} beats. ${errorCount} failed.`);
+      } else {
+        alert(`Failed to generate images for all beats. Please check the console for details.`);
+      }
+
+    } catch (error) {
+      console.error('[App] Error during bulk beat image generation:', error);
+      alert(`Error during bulk image generation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingBeatImageFor(null);
+    }
+  };
+
+  // Handle video upload for beats
+  const handleUploadBeatVideo = async (sceneId: string, beatId: string, videoFile: File) => {
+    console.log(`[App] Uploading video for beat ${beatId} in scene ${sceneId}`);
+    
+    try {
+      // Save video blob directly to storage (using saveCharacterImage which handles blobs)
+      const videoId = await saveCharacterImage(videoFile, `beat_${beatId}_video`);
+      
+      if (videoId) {
+        // Update the beat with the video ID
+        setScenes(prevScenes => 
+          prevScenes.map(scene => {
+            if (scene.id === sceneId && scene.beats) {
+              const updatedBeats = scene.beats.map(beat => 
+                beat.id === beatId ? { ...beat, videoId } : beat
+              );
+              return { ...scene, beats: updatedBeats };
+            }
+            return scene;
+          })
+        );
+        
+        console.log(`[App] Successfully uploaded video for beat ${beatId}`);
+        alert('Video uploaded successfully!');
+      } else {
+        throw new Error('Failed to save video to storage');
+      }
+    } catch (error) {
+      console.error(`[App] Error uploading video for beat ${beatId}:`, error);
+      alert(`Error uploading video: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
   const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
 
   return (
@@ -836,7 +1923,12 @@ const App: React.FC = () => {
         onOrganizeFlow={handleOrganizeFlowVertically}
         onPlayStory={handlePlayStory}
         canPlayStory={!!startSceneId}
-        onOpenSettings={handleOpenSettings}
+        onGenerateAllSceneImages={generateAllSceneImages}
+        isBulkGeneratingImages={isBulkGeneratingImages}
+        bulkImageProgress={bulkImageProgress}
+        onOpenSettings={() => setIsVoiceSettingsOpen(true)}
+        onMigrateBeats={handleMigrateBeats}
+        isMigratingBeats={isMigratingBeats}
       />
       <CanvasView
         storyData={storyData}
@@ -855,6 +1947,18 @@ const App: React.FC = () => {
         onUpdateConnectionLabel={updateConnectionLabel}
         onGenerateSceneImageForScene={generateSceneImageForScene}
         generatingImageForScene={generatingImageForScene}
+        onContinueWithAI={handleContinueWithAI}
+        onContinueWithAI2Options={handleContinueWithAI2Options}
+        onContinueWithAI3Options={handleContinueWithAI3Options}
+        generatingContinuationForScene={generatingContinuationForScene}
+        onRewriteText={handleRewriteText}
+        rewritingTextForScene={rewritingTextForScene}
+        onSubdivideIntoBeats={handleSubdivideIntoBeats}
+        subdividingSceneIntoBeats={subdividingSceneIntoBeats}
+        onGenerateBeatImage={handleGenerateBeatImage}
+        onGenerateAllBeatImages={handleGenerateAllBeatImages}
+        onUploadBeatVideo={handleUploadBeatVideo}
+        generatingBeatImageFor={generatingBeatImageFor}
       />
       <ZoomControls
         zoomLevel={zoomLevel}
@@ -869,21 +1973,31 @@ const App: React.FC = () => {
           story={storyData}
           initialSceneId={startSceneId}
           elevenLabsApiKey={elevenLabsApiKey}
+          narratorVoiceId={narratorVoiceId}
         />
       )}
-      <VoiceSettingsModal 
-        isOpen={isSettingsModalOpen}
-        onClose={handleCloseSettings}
+      
+      <VoiceSettingsModal
+        isOpen={isVoiceSettingsOpen}
+        onClose={() => setIsVoiceSettingsOpen(false)}
         currentAssignments={voiceAssignments}
-        onSaveAssignments={handleSaveVoiceAssignments}
+        onSaveAssignments={setVoiceAssignments}
         currentElevenLabsApiKey={elevenLabsApiKey}
-        onSetElevenLabsApiKey={handleSetElevenLabsApiKey}
+        onSetElevenLabsApiKey={setElevenLabsApiKey}
         currentOpenaiApiKey={openaiApiKey}
-        onSetOpenaiApiKey={handleSetOpenaiApiKey}
+        onSetOpenaiApiKey={setOpenaiApiKey}
         onGenerateImagePrompts={generateImagePrompts}
         isGeneratingPrompts={isGeneratingPrompts}
         characterAnalysisProgress={characterAnalysisProgress}
+        onGenerateAllSceneImages={generateAllSceneImages}
+        isBulkGeneratingImages={isBulkGeneratingImages}
+        bulkImageProgress={bulkImageProgress}
+        onMigrateBeats={handleMigrateBeats}
+        isMigratingBeats={isMigratingBeats}
+        currentNarratorVoiceId={narratorVoiceId || undefined}
+        onSetNarratorVoiceId={setNarratorVoiceId}
       />
+
     </div>
   );
 };

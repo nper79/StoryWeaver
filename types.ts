@@ -1,7 +1,24 @@
+export interface BeatPart {
+  speaker: string; // Character name ("Narrator", "Lucy", etc.)
+  text: string; // What they say
+  voiceId?: string; // Resolved voice ID for this speaker
+}
+
+export interface Beat {
+  id: string;
+  text: string; // Keep for backward compatibility
+  imagePrompt?: string;
+  imageId?: string;
+  videoId?: string; // New: Video ID for uploaded video
+  speaker?: string; // Keep for backward compatibility
+  order: number; // Order within the scene
+  parts?: BeatPart[]; // New: Multiple speaking parts within this beat
+}
+
 export interface Scene {
   id: string;
   title: string;
-  content: string;
+  content: string; // Keep for backward compatibility
   x: number;
   y: number;
   width: number;
@@ -12,6 +29,8 @@ export interface Scene {
   settingContext?: string; // Setting/location context from this or previous scenes
   locationKey?: string; // Key to identify the location/setting for consistency
   baseLocationImageId?: string; // Reference image for this location to maintain consistency
+  beats?: Beat[]; // New: Array of beats for subdivided scenes
+  isSubdivided?: boolean; // Flag to indicate if scene has been subdivided into beats
 }
 
 export interface Connection {
@@ -32,6 +51,7 @@ export interface StoryData {
   connections: Connection[];
   startSceneId?: string | null; // Optional: ID of the first scene
   voiceAssignments?: VoiceAssignment[]; 
+  narratorVoiceId?: string; // Voice ID for the narrator throughout the story
 }
 
 export interface Point {

@@ -9,7 +9,7 @@ interface StoredImage {
   id: string;
   filename: string;
   data: Blob;
-  type: 'scene' | 'character';
+  type: 'scene' | 'character' | 'video';
   timestamp: number;
 }
 
@@ -57,7 +57,7 @@ function base64ToBlob(base64Data: string): Blob {
 export async function saveImageToStorage(
   base64Data: string,
   filename: string,
-  type: 'scene' | 'character'
+  type: 'scene' | 'character' | 'video'
 ): Promise<string> {
   try {
     const db = await initDB();
@@ -94,6 +94,7 @@ export async function saveImageToStorage(
  */
 export async function getImageFromStorage(id: string): Promise<string | null> {
   try {
+    console.log(`[FileStorage] DEBUG - Attempting to retrieve image with ID: ${id}`);
     const db = await initDB();
     
     return new Promise((resolve, reject) => {
@@ -104,18 +105,36 @@ export async function getImageFromStorage(id: string): Promise<string | null> {
       request.onsuccess = () => {
         const result = request.result as StoredImage;
         if (result) {
+          console.log(`[FileStorage] ✅ Found image in storage:`, {
+            id: result.id,
+            filename: result.filename,
+            type: result.type,
+            blobSize: result.data.size,
+            timestamp: new Date(result.timestamp).toISOString()
+          });
           const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = () => reject(reader.error);
+          reader.onload = () => {
+            const dataUrl = reader.result as string;
+            console.log(`[FileStorage] ✅ Successfully converted to data URL (length: ${dataUrl.length})`);
+            resolve(dataUrl);
+          };
+          reader.onerror = () => {
+            console.error(`[FileStorage] ❌ Failed to read blob as data URL:`, reader.error);
+            reject(reader.error);
+          };
           reader.readAsDataURL(result.data);
         } else {
+          console.warn(`[FileStorage] ❌ No image found in storage with ID: ${id}`);
           resolve(null);
         }
       };
-      request.onerror = () => reject(request.error);
+      request.onerror = () => {
+        console.error(`[FileStorage] ❌ IndexedDB error retrieving image:`, request.error);
+        reject(request.error);
+      };
     });
   } catch (error) {
-    console.error('[FileStorage] Failed to retrieve image:', error);
+    console.error('[FileStorage] ❌ Failed to retrieve image:', error);
     return null;
   }
 }
@@ -136,16 +155,26 @@ export async function saveGeneratedImage(base64Data: string, sceneId: string): P
  * @returns Promise with the unique ID for the stored image
  */
 export async function saveCharacterImage(imageData: string | Blob, characterName: string): Promise<string> {
+  console.log(`[FileStorage] DEBUG - Saving character image for: ${characterName}`);
   const timestamp = Date.now();
   const safeCharName = characterName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
   const filename = `${safeCharName}-${timestamp}.png`;
   
+  console.log(`[FileStorage] DEBUG - Generated filename: ${filename}`);
+  console.log(`[FileStorage] DEBUG - Image data type:`, imageData instanceof Blob ? 'Blob' : 'Base64 string');
+  
   // Handle blob vs base64 input
+  let imageId: string;
   if (imageData instanceof Blob) {
-    return saveImageToBlob(imageData, filename, 'character');
+    console.log(`[FileStorage] DEBUG - Saving blob (size: ${imageData.size} bytes)`);
+    imageId = await saveImageToBlob(imageData, filename, 'character');
   } else {
-    return saveImageToStorage(imageData, filename, 'character');
+    console.log(`[FileStorage] DEBUG - Saving base64 string (length: ${imageData.length})`);
+    imageId = await saveImageToStorage(imageData, filename, 'character');
   }
+  
+  console.log(`[FileStorage] ✅ Character image saved with ID: ${imageId}`);
+  return imageId;
 }
 
 /**
@@ -154,7 +183,7 @@ export async function saveCharacterImage(imageData: string | Blob, characterName
 async function saveImageToBlob(
   blob: Blob,
   filename: string,
-  type: 'scene' | 'character'
+  type: 'scene' | 'character' | 'video'
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const db = initDB();

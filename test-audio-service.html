@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Audio Service</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .info { color: #17a2b8; }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        textarea {
+            height: 80px;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 Audio Service Tester</h1>
+        
+        <div class="test-section">
+            <h3>1. API Key Test</h3>
+            <input type="text" id="apiKeyInput" placeholder="Enter ElevenLabs API Key" />
+            <button onclick="testApiKey()">Test API Key</button>
+            <div id="apiKeyResult" class="log"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>2. Voice List Test</h3>
+            <button onclick="fetchVoices()" id="fetchVoicesBtn">Fetch Available Voices</button>
+            <div id="voicesResult" class="log"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>3. Audio Generation Test</h3>
+            <textarea id="testText" placeholder="Enter text to convert to speech">Hello, this is a test of the ElevenLabs audio service.</textarea>
+            <select id="voiceSelect">
+                <option value="">Select a voice...</option>
+                <option value="21m00Tcm4TlvDq8ikWAM">Rachel (Default)</option>
+            </select>
+            <button onclick="generateTestAudio()" id="generateBtn">Generate Audio</button>
+            <div id="audioResult" class="log"></div>
+            <audio id="audioPlayer" controls style="width: 100%; margin-top: 10px; display: none;"></audio>
+        </div>
+
+        <div class="test-section">
+            <h3>4. Debug Log</h3>
+            <button onclick="clearLog()">Clear Log</button>
+            <div id="debugLog" class="log"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import the audio service
+        import { AudioService } from './audioService.js';
+
+        let currentApiKey = '';
+        let availableVoices = [];
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logElement = document.getElementById('debugLog');
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : 'info';
+            logElement.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+            console.log(`[${timestamp}] ${message}`);
+        }
+
+        window.testApiKey = async function() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            const resultDiv = document.getElementById('apiKeyResult');
+            
+            if (!apiKey) {
+                resultDiv.innerHTML = '<span class="error">Please enter an API key</span>';
+                return;
+            }
+
+            currentApiKey = apiKey;
+            resultDiv.innerHTML = '<span class="info">Testing API key...</span>';
+            log('Testing API key...');
+
+            try {
+                const isValid = await AudioService.testApiKey(apiKey);
+                if (isValid) {
+                    resultDiv.innerHTML = '<span class="success">✅ API key is valid!</span>';
+                    log('API key test passed', 'success');
+                } else {
+                    resultDiv.innerHTML = '<span class="error">❌ API key is invalid</span>';
+                    log('API key test failed', 'error');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+                log(`API key test error: ${error.message}`, 'error');
+            }
+        };
+
+        window.fetchVoices = async function() {
+            const resultDiv = document.getElementById('voicesResult');
+            const voiceSelect = document.getElementById('voiceSelect');
+            
+            if (!currentApiKey) {
+                resultDiv.innerHTML = '<span class="error">Please test API key first</span>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<span class="info">Fetching voices...</span>';
+            log('Fetching available voices...');
+
+            try {
+                availableVoices = await AudioService.getVoices(currentApiKey);
+                
+                // Update voice selector
+                voiceSelect.innerHTML = '<option value="">Select a voice...</option>';
+                availableVoices.forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice.voice_id;
+                    option.textContent = `${voice.name} (${voice.category || 'Unknown'})`;
+                    voiceSelect.appendChild(option);
+                });
+
+                resultDiv.innerHTML = `<span class="success">✅ Found ${availableVoices.length} voices</span>\n${availableVoices.map(v => `• ${v.name} (${v.voice_id})`).join('\n')}`;
+                log(`Successfully fetched ${availableVoices.length} voices`, 'success');
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+                log(`Voice fetch error: ${error.message}`, 'error');
+            }
+        };
+
+        window.generateTestAudio = async function() {
+            const text = document.getElementById('testText').value.trim();
+            const voiceId = document.getElementById('voiceSelect').value;
+            const resultDiv = document.getElementById('audioResult');
+            const audioPlayer = document.getElementById('audioPlayer');
+            
+            if (!currentApiKey) {
+                resultDiv.innerHTML = '<span class="error">Please test API key first</span>';
+                return;
+            }
+            
+            if (!text) {
+                resultDiv.innerHTML = '<span class="error">Please enter text to convert</span>';
+                return;
+            }
+            
+            if (!voiceId) {
+                resultDiv.innerHTML = '<span class="error">Please select a voice</span>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<span class="info">Generating audio...</span>';
+            log(`Generating audio: "${text.substring(0, 50)}..." with voice ${voiceId}`);
+
+            try {
+                const audioBlob = await AudioService.generateSpeech({
+                    text: text,
+                    voiceId: voiceId,
+                    apiKey: currentApiKey
+                });
+
+                // Create audio URL and play
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayer.src = audioUrl;
+                audioPlayer.style.display = 'block';
+                
+                resultDiv.innerHTML = `<span class="success">✅ Audio generated successfully! Size: ${audioBlob.size} bytes</span>`;
+                log(`Audio generation successful, size: ${audioBlob.size} bytes`, 'success');
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Error: ${error.message}</span>`;
+                log(`Audio generation error: ${error.message}`, 'error');
+            }
+        };
+
+        window.clearLog = function() {
+            document.getElementById('debugLog').innerHTML = '';
+        };
+
+        // Load API key from .env if available
+        log('Audio Service Tester loaded');
+        log('Enter your ElevenLabs API key to begin testing');
+    </script>
+</body>
+</html>

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Beat Parsing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .beat {
+            background: #e3f2fd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #2196f3;
+        }
+        .part {
+            background: #f8f9fa;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 3px;
+            border-left: 3px solid #28a745;
+        }
+        .speaker {
+            font-weight: bold;
+            color: #d32f2f;
+        }
+        .text {
+            margin-top: 5px;
+            font-style: italic;
+        }
+        .original {
+            background: #fff3e0;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            border-left: 3px solid #ff9800;
+        }
+        button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #1976d2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Teste do Beat Parsing Inteligente</h1>
+        
+        <h2>Exemplo do Usuário:</h2>
+        <div class="original">
+            <strong>Beat Original:</strong><br>
+            "Lucy comes home from school. She calls her cat. 'Whiskers! I'm home! Where are you?'"
+        </div>
+        
+        <button onclick="testParsing()">🔍 Testar Parsing</button>
+        <button onclick="testMoreExamples()">📚 Mais Exemplos</button>
+        <button onclick="clearResults()">🗑️ Limpar</button>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        // Simplified version of the BeatParsingService for testing
+        class BeatParsingService {
+            static parseBeatIntoParts(beatText, detectedCharacters = []) {
+                const parts = [];
+                
+                // Find all dialogue segments (text in quotes)
+                const dialogues = this.extractDialogues(beatText, detectedCharacters);
+                
+                if (dialogues.length === 0) {
+                    // No dialogue found, entire text is narration
+                    return [{
+                        speaker: 'Narrator',
+                        text: beatText.trim()
+                    }];
+                }
+                
+                let currentIndex = 0;
+                
+                for (const dialogue of dialogues) {
+                    // Add narration before this dialogue (if any)
+                    if (dialogue.startIndex > currentIndex) {
+                        const narrationText = beatText.substring(currentIndex, dialogue.startIndex).trim();
+                        if (narrationText) {
+                            parts.push({
+                                speaker: 'Narrator',
+                                text: narrationText
+                            });
+                        }
+                    }
+                    
+                    // Add the dialogue part
+                    parts.push({
+                        speaker: dialogue.speaker,
+                        text: dialogue.text
+                    });
+                    
+                    currentIndex = dialogue.endIndex;
+                }
+                
+                // Add any remaining narration after the last dialogue
+                if (currentIndex < beatText.length) {
+                    const remainingText = beatText.substring(currentIndex).trim();
+                    if (remainingText) {
+                        parts.push({
+                            speaker: 'Narrator',
+                            text: remainingText
+                        });
+                    }
+                }
+                
+                return parts;
+            }
+            
+            static extractDialogues(text, detectedCharacters = []) {
+                const dialogues = [];
+                
+                // Regex to find quoted text (both single and double quotes)
+                const quoteRegex = /(['"])((?:(?!\1)[^\\]|\\.)*)(\1)/g;
+                let match;
+                
+                while ((match = quoteRegex.exec(text)) !== null) {
+                    const fullMatch = match[0];
+                    const quoteContent = match[2];
+                    const startIndex = match.index;
+                    const endIndex = match.index + fullMatch.length;
+                    
+                    // Try to identify the speaker from the context before the quote
+                    const speaker = this.identifySpeaker(text, startIndex, detectedCharacters);
+                    
+                    dialogues.push({
+                        speaker,
+                        text: quoteContent,
+                        startIndex,
+                        endIndex
+                    });
+                }
+                
+                return dialogues;
+            }
+            
+            static identifySpeaker(text, dialogueStartIndex, detectedCharacters = []) {
+                // Get the text before the dialogue (up to 100 characters back)
+                const contextStart = Math.max(0, dialogueStartIndex - 100);
+                const context = text.substring(contextStart, dialogueStartIndex);
+                
+                // Common patterns for speaker identification
+                const speakerPatterns = [
+                    // "Lucy says:" or "Lucy said:"
+                    /(\w+)\s+(?:says?|said|asks?|asked|calls?|called|shouts?|shouted|whispers?|whispered)[\s:]/i,
+                    // "Lucy:" (direct format)
+                    /(\w+):\s*$/,
+                    // "Lucy calls her cat" -> Lucy is likely the speaker
+                    /(\w+)\s+(?:calls?|tells?|says?|asks?|shouts?|whispers?)/i,
+                ];
+                
+                for (const pattern of speakerPatterns) {
+                    const match = context.match(pattern);
+                    if (match) {
+                        const potentialSpeaker = match[1];
+                        // Validate that this looks like a character name and is in detected characters
+                        if (this.isValidCharacterName(potentialSpeaker) && 
+                            (detectedCharacters.length === 0 || detectedCharacters.includes(potentialSpeaker))) {
+                            return potentialSpeaker;
+                        }
+                    }
+                }
+                
+                // If no clear speaker found, try to find the most recently mentioned character
+                const recentCharacter = this.findRecentCharacter(context, detectedCharacters);
+                if (recentCharacter) {
+                    return recentCharacter;
+                }
+                
+                // Default fallback
+                return 'Unknown Speaker';
+            }
+            
+            static isValidCharacterName(name) {
+                // Must be capitalized, reasonable length, no numbers or special chars
+                return /^[A-Z][a-zA-Z]{1,20}$/.test(name) && 
+                       !['The', 'She', 'He', 'They', 'It', 'This', 'That'].includes(name);
+            }
+            
+            static findRecentCharacter(context, detectedCharacters = []) {
+                // Look for capitalized words that could be character names
+                const words = context.split(/\s+/);
+                
+                for (let i = words.length - 1; i >= 0; i--) {
+                    const word = words[i].replace(/[.,!?:;]$/, ''); // Remove punctuation
+                    if (this.isValidCharacterName(word) && 
+                        (detectedCharacters.length === 0 || detectedCharacters.includes(word))) {
+                        return word;
+                    }
+                }
+                
+                return null;
+            }
+        }
+
+        function testParsing() {
+            const beatText = "Lucy comes home from school. She calls her cat. 'Whiskers! I'm home! Where are you?'";
+            const detectedCharacters = ['Lucy'];
+            
+            const parts = BeatParsingService.parseBeatIntoParts(beatText, detectedCharacters);
+            
+            displayResults([{
+                original: beatText,
+                parts: parts,
+                detectedCharacters: detectedCharacters
+            }]);
+        }
+        
+        function testMoreExamples() {
+            const examples = [
+                {
+                    original: "Lucy comes home from school. She calls her cat. 'Whiskers! I'm home! Where are you?'",
+                    detectedCharacters: ['Lucy']
+                },
+                {
+                    original: "John walked into the room. 'Hello everyone!' he said cheerfully. Mary looked up from her book.",
+                    detectedCharacters: ['John', 'Mary']
+                },
+                {
+                    original: "The cat meowed loudly. Sarah picked it up and whispered, 'Don't worry, little one.'",
+                    detectedCharacters: ['Sarah']
+                },
+                {
+                    original: "'I can't find my keys anywhere!' Tom shouted in frustration. His wife Emma came to help.",
+                    detectedCharacters: ['Tom', 'Emma']
+                }
+            ];
+            
+            const results = examples.map(example => ({
+                original: example.original,
+                parts: BeatParsingService.parseBeatIntoParts(example.original, example.detectedCharacters),
+                detectedCharacters: example.detectedCharacters
+            }));
+            
+            displayResults(results);
+        }
+        
+        function displayResults(results) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h2>🎯 Resultados do Parsing:</h2>';
+            
+            results.forEach((result, index) => {
+                const beatDiv = document.createElement('div');
+                beatDiv.className = 'beat';
+                beatDiv.innerHTML = `
+                    <h3>Beat ${index + 1}</h3>
+                    <div class="original">
+                        <strong>Original:</strong> ${result.original}<br>
+                        <strong>Personagens Detectados:</strong> [${result.detectedCharacters.join(', ')}]
+                    </div>
+                    <h4>Partes Identificadas:</h4>
+                `;
+                
+                result.parts.forEach((part, partIndex) => {
+                    const partDiv = document.createElement('div');
+                    partDiv.className = 'part';
+                    partDiv.innerHTML = `
+                        <div class="speaker">🎭 ${part.speaker}</div>
+                        <div class="text">"${part.text}"</div>
+                    `;
+                    beatDiv.appendChild(partDiv);
+                });
+                
+                resultsDiv.appendChild(beatDiv);
+            });
+        }
+        
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+    </script>
+</body>
+</html>

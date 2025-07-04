@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Clear Voice Data</title>
+</head>
+<body>
+  <h1>Clear Voice Assignment Data</h1>
+  <button onclick="clearData()">Clear All Voice Data</button>
+  <div id="result"></div>
+
+  <script>
+    function clearData() {
+      const result = document.getElementById('result');
+      
+      try {
+        // Clear localStorage
+        const keys = Object.keys(localStorage);
+        const voiceKeys = keys.filter(key => 
+          key.includes('voice') || 
+          key.includes('eleven') || 
+          key.includes('story') ||
+          key.includes('assignment')
+        );
+        
+        voiceKeys.forEach(key => {
+          localStorage.removeItem(key);
+          console.log('Removed:', key);
+        });
+        
+        // Clear IndexedDB
+        const deleteDB = indexedDB.deleteDatabase('StoryWeaverDB');
+        deleteDB.onsuccess = () => {
+          result.innerHTML = `
+            <h2>✅ Data Cleared Successfully!</h2>
+            <p>Removed ${voiceKeys.length} localStorage keys</p>
+            <p>Cleared IndexedDB</p>
+            <p><strong>Now refresh the main app and the voice assignments should be reset.</strong></p>
+          `;
+        };
+        
+        deleteDB.onerror = () => {
+          result.innerHTML = `
+            <h2>⚠️ Partial Success</h2>
+            <p>Removed ${voiceKeys.length} localStorage keys</p>
+            <p>Failed to clear IndexedDB</p>
+            <p><strong>Refresh the main app anyway.</strong></p>
+          `;
+        };
+        
+      } catch (error) {
+        result.innerHTML = `<h2>❌ Error: ${error.message}</h2>`;
+      }
+    }
+  </script>
+</body>
+</html>

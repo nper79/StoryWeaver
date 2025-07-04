@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Audio Issues</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .debug-section {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        .error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+            color: #721c24;
+        }
+        .success {
+            background: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
+        }
+        .warning {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+            color: #856404;
+        }
+        .code {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 3px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            margin: 5px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .step {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+        }
+        .step h3 {
+            margin-top: 0;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Diagnóstico de Problemas de Áudio</h1>
+        <p>Este script ajuda a identificar por que o áudio não está funcionando na aplicação.</p>
+        
+        <div class="step">
+            <h3>Passo 1: Verificar LocalStorage</h3>
+            <button onclick="checkLocalStorage()">🔍 Verificar Voice Assignments</button>
+            <div id="localStorage-result"></div>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 2: Verificar API Key</h3>
+            <button onclick="checkApiKey()">🔑 Verificar ElevenLabs API Key</button>
+            <div id="apikey-result"></div>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 3: Simular Beat Parsing</h3>
+            <button onclick="simulateBeatParsing()">🎭 Simular Parsing de Beat</button>
+            <div id="parsing-result"></div>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 4: Testar Voice Resolution</h3>
+            <button onclick="testVoiceResolution()">🎯 Testar Resolução de Vozes</button>
+            <div id="voice-result"></div>
+        </div>
+        
+        <div class="step">
+            <h3>Passo 5: Verificar Console Logs</h3>
+            <div class="debug-section warning">
+                <strong>📋 Instruções:</strong><br>
+                1. Abra o DevTools (F12)<br>
+                2. Vá para a aba Console<br>
+                3. Abra o PlayModal na aplicação principal<br>
+                4. Procure por logs que começam com:<br>
+                <div class="code">🎭 Beat X using existing parts
+🤖 Beat X auto-parsed into parts
+🎯 Part X of Beat X
+❌ Not triggering audio</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function checkLocalStorage() {
+            const resultDiv = document.getElementById('localStorage-result');
+            
+            try {
+                // Check for voice assignments
+                const voiceAssignments = localStorage.getItem('storyData');
+                let storyData = null;
+                
+                if (voiceAssignments) {
+                    storyData = JSON.parse(voiceAssignments);
+                }
+                
+                let html = '<div class="debug-section">';
+                
+                if (storyData && storyData.voiceAssignments) {
+                    html += '<div class="success">✅ Voice Assignments encontrados:</div>';
+                    html += '<div class="code">' + JSON.stringify(storyData.voiceAssignments, null, 2) + '</div>';
+                    
+                    // Check if voice assignments have valid voice IDs
+                    const hasValidVoices = storyData.voiceAssignments.some(va => va.voiceId && va.voiceId.trim());
+                    if (hasValidVoices) {
+                        html += '<div class="success">✅ Voice IDs válidos encontrados</div>';
+                    } else {
+                        html += '<div class="error">❌ Nenhum Voice ID válido encontrado</div>';
+                    }
+                } else {
+                    html += '<div class="error">❌ Nenhum Voice Assignment encontrado no localStorage</div>';
+                }
+                
+                // Check for .env file data
+                const envData = localStorage.getItem('envData');
+                if (envData) {
+                    html += '<div class="success">✅ Dados do .env encontrados</div>';
+                } else {
+                    html += '<div class="warning">⚠️ Dados do .env não encontrados</div>';
+                }
+                
+                html += '</div>';
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="debug-section error">❌ Erro ao verificar localStorage: ${error.message}</div>`;
+            }
+        }
+        
+        function checkApiKey() {
+            const resultDiv = document.getElementById('apikey-result');
+            
+            try {
+                // Check various sources for API key
+                const envData = localStorage.getItem('envData');
+                let envApiKey = null;
+                
+                if (envData) {
+                    const parsed = JSON.parse(envData);
+                    envApiKey = parsed.VITE_ELEVENLABS_API_KEY;
+                }
+                
+                const storyData = localStorage.getItem('storyData');
+                let stateApiKey = null;
+                
+                if (storyData) {
+                    const parsed = JSON.parse(storyData);
+                    stateApiKey = parsed.elevenLabsApiKey;
+                }
+                
+                let html = '<div class="debug-section">';
+                
+                if (envApiKey) {
+                    html += `<div class="success">✅ API Key do .env: ${envApiKey.substring(0, 8)}...</div>`;
+                } else {
+                    html += '<div class="warning">⚠️ API Key não encontrada no .env</div>';
+                }
+                
+                if (stateApiKey) {
+                    html += `<div class="success">✅ API Key do state: ${stateApiKey.substring(0, 8)}...</div>`;
+                } else {
+                    html += '<div class="warning">⚠️ API Key não encontrada no state</div>';
+                }
+                
+                if (!envApiKey && !stateApiKey) {
+                    html += '<div class="error">❌ Nenhuma API Key encontrada! Isso explica por que o áudio não funciona.</div>';
+                }
+                
+                html += '</div>';
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="debug-section error">❌ Erro ao verificar API Key: ${error.message}</div>`;
+            }
+        }
+        
+        function simulateBeatParsing() {
+            const resultDiv = document.getElementById('parsing-result');
+            
+            // Simulate the beat parsing logic
+            const sampleBeat = {
+                id: "beat_test",
+                text: "Lucy comes home from school. She calls her cat. 'Whiskers! I'm home! Where are you?'",
+                order: 0
+            };
+            
+            const detectedCharacters = ['Lucy'];
+            
+            // Simple parsing simulation
+            const parts = [];
+            const text = sampleBeat.text;
+            
+            // Find quotes
+            const quoteRegex = /(['"])((?:(?!\1)[^\\]|\\.)*)(\1)/g;
+            let match;
+            let currentIndex = 0;
+            
+            while ((match = quoteRegex.exec(text)) !== null) {
+                // Add narration before quote
+                if (match.index > currentIndex) {
+                    const narration = text.substring(currentIndex, match.index).trim();
+                    if (narration) {
+                        parts.push({
+                            speaker: 'Narrator',
+                            text: narration
+                        });
+                    }
+                }
+                
+                // Add dialogue
+                const context = text.substring(Math.max(0, match.index - 50), match.index);
+                let speaker = 'Unknown Speaker';
+                
+                // Simple speaker detection
+                if (context.includes('Lucy')) {
+                    speaker = 'Lucy';
+                }
+                
+                parts.push({
+                    speaker: speaker,
+                    text: match[2]
+                });
+                
+                currentIndex = match.index + match[0].length;
+            }
+            
+            // Add remaining narration
+            if (currentIndex < text.length) {
+                const remaining = text.substring(currentIndex).trim();
+                if (remaining) {
+                    parts.push({
+                        speaker: 'Narrator',
+                        text: remaining
+                    });
+                }
+            }
+            
+            let html = '<div class="debug-section success">';
+            html += '<div>✅ Beat parsing simulado:</div>';
+            html += '<div class="code">Beat original: ' + sampleBeat.text + '</div>';
+            html += '<div>Partes detectadas:</div>';
+            
+            parts.forEach((part, index) => {
+                html += `<div class="code">Parte ${index + 1}: ${part.speaker} -> "${part.text}"</div>`;
+            });
+            
+            html += '</div>';
+            resultDiv.innerHTML = html;
+        }
+        
+        function testVoiceResolution() {
+            const resultDiv = document.getElementById('voice-result');
+            
+            try {
+                const storyData = localStorage.getItem('storyData');
+                if (!storyData) {
+                    resultDiv.innerHTML = '<div class="debug-section error">❌ Nenhum storyData encontrado</div>';
+                    return;
+                }
+                
+                const parsed = JSON.parse(storyData);
+                const voiceAssignments = parsed.voiceAssignments || [];
+                
+                // Simulate voice resolution for parsed parts
+                const sampleParts = [
+                    { speaker: 'Narrator', text: 'Lucy comes home from school. She calls her cat.' },
+                    { speaker: 'Lucy', text: 'Whiskers! I\'m home! Where are you?' }
+                ];
+                
+                let html = '<div class="debug-section">';
+                html += '<div><strong>🎯 Teste de Resolução de Vozes:</strong></div>';
+                
+                sampleParts.forEach((part, index) => {
+                    // Try to find voice for this speaker
+                    const voiceAssignment = voiceAssignments.find(va => 
+                        va.characterName === part.speaker ||
+                        va.characterName.toLowerCase() === part.speaker.toLowerCase() ||
+                        va.characterName.toUpperCase() === part.speaker.toUpperCase()
+                    );
+                    
+                    if (voiceAssignment && voiceAssignment.voiceId) {
+                        html += `<div class="success">✅ Parte ${index + 1} (${part.speaker}): Voice ID encontrado (${voiceAssignment.voiceId})</div>`;
+                        html += `<div class="code">isSpokenLine: true</div>`;
+                    } else {
+                        html += `<div class="error">❌ Parte ${index + 1} (${part.speaker}): Nenhum Voice ID encontrado</div>`;
+                        html += `<div class="code">isSpokenLine: false</div>`;
+                    }
+                });
+                
+                html += '<div class="warning">💡 Se alguma parte mostra "Nenhum Voice ID encontrado", isso explica por que o áudio não toca para essa parte.</div>';
+                html += '</div>';
+                
+                resultDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="debug-section error">❌ Erro ao testar resolução de vozes: ${error.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

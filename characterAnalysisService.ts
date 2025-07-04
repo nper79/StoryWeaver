@@ -92,7 +92,8 @@ export function buildContextFromPreviousScenes(): string {
 }
 
 /**
- * Generates a simple scene-based image prompt
+ * Generates a simple scene-based image prompt using the format:
+ * [character(s)][setting][action][expression/mood]
  */
 export async function generateSimpleImagePrompt(
   scene: Scene,
@@ -104,7 +105,7 @@ export async function generateSimpleImagePrompt(
   console.log(`[CharacterAnalysis] Detected characters:`, detectedCharacters);
   console.log(`[CharacterAnalysis] Setting context:`, settingContext);
   
-  // Clean up the setting context to extract just the location
+  // Extract location from setting context
   let location = "a location";
   if (settingContext) {
     const content = settingContext.toLowerCase();
@@ -129,34 +130,68 @@ export async function generateSimpleImagePrompt(
     }
   }
   
-  // Create clean, simple prompt
-  let prompt = "";
-  
-  if (detectedCharacters.length === 0) {
-    prompt = `Anime style scene in ${location}`;
-  } else if (detectedCharacters.length === 1) {
-    prompt = `This character in ${location}`;
-  } else {
-    prompt = `These ${detectedCharacters.length} characters in ${location}`;
-  }
-  
-  // Add simple action based on scene content
+  // Analyze scene content for actions and expressions
   const content = scene.content.toLowerCase();
-  if (content.includes('smiling') || content.includes('happy')) {
-    prompt += ", smiling";
-  } else if (content.includes('talking') || content.includes('conversation') || content.includes('como estas')) {
-    prompt += ", talking";
+  
+  // Extract action
+  let action = "standing";
+  if (content.includes('talking') || content.includes('conversation') || content.includes('como estas') || content.includes('speaking')) {
+    action = "talking to each other";
   } else if (content.includes('walking')) {
-    prompt += ", walking";
+    action = "walking";
   } else if (content.includes('sitting')) {
-    prompt += ", sitting";
+    action = "sitting";
   } else if (content.includes('looking')) {
-    prompt += ", looking around";
+    action = "looking around";
   } else if (content.includes('met') || content.includes('meeting')) {
-    prompt += ", meeting";
+    action = "meeting";
+  } else if (content.includes('eating') || content.includes('drinking')) {
+    action = "having a meal";
+  } else if (content.includes('working')) {
+    action = "working";
+  } else if (content.includes('reading')) {
+    action = "reading";
   }
   
-  console.log(`[CharacterAnalysis] Generated clean prompt:`, prompt);
+  // Extract expression/mood
+  let mood = "neutral expression";
+  if (content.includes('smiling') || content.includes('happy') || content.includes('joy') || content.includes('laugh')) {
+    mood = "having a good time";
+  } else if (content.includes('sad') || content.includes('crying') || content.includes('upset')) {
+    mood = "looking sad";
+  } else if (content.includes('angry') || content.includes('mad') || content.includes('frustrated')) {
+    mood = "looking frustrated";
+  } else if (content.includes('surprised') || content.includes('shocked')) {
+    mood = "looking surprised";
+  } else if (content.includes('worried') || content.includes('concerned')) {
+    mood = "looking concerned";
+  } else if (content.includes('excited') || content.includes('enthusiastic')) {
+    mood = "looking excited";
+  } else if (content.includes('relaxed') || content.includes('calm')) {
+    mood = "looking relaxed";
+  }
+  
+  // Build a more descriptive prompt using character names
+  let characterPart = "";
+  if (detectedCharacters.length === 0) {
+    characterPart = `A scene shows ${location}`;
+  } else if (detectedCharacters.length === 1) {
+    characterPart = `${detectedCharacters[0]} is`;
+  } else if (detectedCharacters.length === 2) {
+    characterPart = `${detectedCharacters[0]} and ${detectedCharacters[1]} are`;
+  } else {
+    const allButLast = detectedCharacters.slice(0, -1).join(', ');
+    const last = detectedCharacters[detectedCharacters.length - 1];
+    characterPart = `${allButLast} and ${last} are`;
+  }
+
+  // Add a style prefix for consistency
+  const style = "Anime style.";
+  
+  // Construct a more natural-sounding prompt
+  const prompt = `${style} ${characterPart} ${action} in ${location}. Mood: ${mood}.`;
+  
+  console.log(`[CharacterAnalysis] Generated structured prompt:`, prompt);
   
   return {
     prompt,

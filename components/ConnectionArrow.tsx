@@ -1,4 +1,3 @@
-
 import React from 'react';
 import type { Connection, Scene, Point } from '../types';
 import { ARROW_HEAD_ID } from '../constants';
@@ -8,6 +7,8 @@ interface ConnectionArrowProps {
   scenes: Scene[];
   onDelete: (connectionId: string) => void;
   isSelected: boolean; // If the connection itself is selected (future use)
+  connectionIndex?: number; // Index of this connection among connections from the same source
+  totalConnections?: number; // Total connections from the same source
 }
 
 // Helper function to calculate intersection point of a line and a rectangle
@@ -52,17 +53,57 @@ const getIntersectionPoint = (rect: Scene, lineStart: Point, lineEnd: Point): Po
 };
 
 
-const ConnectionArrow: React.FC<ConnectionArrowProps> = ({ connection, scenes, onDelete, isSelected }) => {
+const ConnectionArrow: React.FC<ConnectionArrowProps> = ({ connection, scenes, onDelete, isSelected, connectionIndex, totalConnections }) => {
   const fromScene = scenes.find(s => s.id === connection.fromSceneId);
   const toScene = scenes.find(s => s.id === connection.toSceneId);
 
   if (!fromScene || !toScene) return null;
+  
+  // Ensure scenes have valid dimensions
+  if (!fromScene.width || !fromScene.height || !toScene.width || !toScene.height) {
+    console.warn(`Invalid scene dimensions for connection ${connection.id}`);
+    return null;
+  }
 
   const fromCenter: Point = { x: fromScene.x + fromScene.width / 2, y: fromScene.y + fromScene.height / 2 };
   const toCenter: Point = { x: toScene.x + toScene.width / 2, y: toScene.y + toScene.height / 2 };
 
-  const p1 = getIntersectionPoint(fromScene, fromCenter, toCenter);
-  const p2 = getIntersectionPoint(toScene, toCenter, fromCenter); // Reversed for toScene
+  // Calculate offset for multiple connections
+  let offsetX = 0;
+  let offsetY = 0;
+  
+  if (connectionIndex !== undefined && totalConnections !== undefined && totalConnections > 1) {
+    const maxOffset = 30; // Maximum offset in pixels
+    const offsetStep = maxOffset / Math.max(1, totalConnections - 1);
+    const centerIndex = (totalConnections - 1) / 2;
+    const relativeIndex = connectionIndex - centerIndex;
+    
+    // Calculate perpendicular offset
+    const dx = toCenter.x - fromCenter.x;
+    const dy = toCenter.y - fromCenter.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    
+    if (length > 0) {
+      // Perpendicular vector (rotated 90 degrees)
+      const perpX = -dy / length;
+      const perpY = dx / length;
+      
+      offsetX = perpX * relativeIndex * offsetStep;
+      offsetY = perpY * relativeIndex * offsetStep;
+    }
+  }
+
+  const adjustedFromCenter: Point = { x: fromCenter.x + offsetX, y: fromCenter.y + offsetY };
+  const adjustedToCenter: Point = { x: toCenter.x + offsetX, y: toCenter.y + offsetY };
+
+  const p1 = getIntersectionPoint(fromScene, adjustedFromCenter, adjustedToCenter);
+  const p2 = getIntersectionPoint(toScene, adjustedToCenter, adjustedFromCenter); // Reversed for toScene
+
+  // Validate calculated points
+  if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p2.x) || !isFinite(p2.y)) {
+    console.warn(`Invalid connection points for ${connection.id}`);
+    return null;
+  }
 
   const midX = (p1.x + p2.x) / 2;
   const midY = (p1.y + p2.y) / 2;
@@ -81,7 +122,7 @@ const ConnectionArrow: React.FC<ConnectionArrowProps> = ({ connection, scenes, o
         x2={p2.x}
         y2={p2.y}
         stroke={isSelected ? '#0ea5e9' : '#38bdf8'} // sky-500 or sky-400
-        strokeWidth="2.5"
+        strokeWidth="3.5"
         markerEnd={`url(#${ARROW_HEAD_ID})`}
         className="transition-all"
       />

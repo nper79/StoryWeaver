@@ -1,103 +1,121 @@
+const XI_API_KEY_HEADER = 'xi-api-key';
+const API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 
-import type { ElevenLabsVoice } from './types';
-
-const BASE_URL = 'https://api.elevenlabs.io/v1';
-
-async function handleElevenLabsError(response: Response, serviceName: string): Promise<Error> {
-  const status = response.status;
-  let errorDetail = response.statusText || "Unknown error";
-
-  try {
-    const responseText = await response.text();
-    if (responseText) {
-      try {
-        const errorJson = JSON.parse(responseText);
-        errorDetail = errorJson.detail?.message || errorJson.message || errorJson.error?.message || responseText;
-      } catch (e) {
-        // Not JSON, use raw text if it's more informative than statusText
-        errorDetail = responseText.substring(0, 200); // Limit length
-      }
-    }
-  } catch (e) {
-    // Failed to get response body
-  }
-  
-  console.error(`ElevenLabs API Error ${status}: ${serviceName} - ${errorDetail}`);
-  return new Error(`${serviceName} failed: ${errorDetail} (Status: ${status})`);
+/**
+ * Generates audio from text using the ElevenLabs API.
+ * Legacy function name for compatibility with PlayModal
+ */
+export async function generateSpeech(text: string, voiceId: string, apiKey: string): Promise<Blob> {
+  return generateAudio(text, voiceId, apiKey);
 }
 
-export async function fetchAvailableElevenLabsVoices(apiKey: string | null): Promise<ElevenLabsVoice[]> {
-  const serviceName = "Fetch ElevenLabs Voices";
-  console.log(`${serviceName}: Starting with API key ${apiKey ? 'provided' : 'not provided'}`); 
-  if (apiKey) {
-    console.log(`${serviceName}: API key length: ${apiKey.length}`);
-    console.log(`${serviceName}: API key starts with: ${apiKey.substring(0, 5)}`);
-    console.log(`${serviceName}: API key ends with: ${apiKey.substring(apiKey.length - 5)}`);
-  } else {
-    console.warn(`${serviceName}: API key is not provided. Voice features will be disabled.`);
-    return []; 
+/**
+ * Generates audio from text using the ElevenLabs API.
+ *
+ * @param {string} text The text to convert to speech.
+ * @param {string} voiceId The ID of the voice to use.
+ * @param {string} apiKey The ElevenLabs API key.
+ * @returns {Promise<Blob>} A promise that resolves with the audio data as a Blob.
+ * @throws {Error} If the API request fails.
+ */
+export async function generateAudio(text: string, voiceId: string, apiKey: string): Promise<Blob> {
+  if (!text || !voiceId || !apiKey) {
+    throw new Error('Text, voice ID, and API key are required.');
   }
-  try {
-    console.log(`${serviceName}: Making API request to ${BASE_URL}/voices`);
-    const headers = { 'xi-api-key': apiKey };
-    console.log(`${serviceName}: Request headers:`, headers);
-    
-    const response = await fetch(`${BASE_URL}/voices`, {
-      headers: headers,
-    });
-    
-    console.log(`${serviceName}: Response status:`, response.status, response.statusText);
-    if (!response.ok) {
-      console.error(`${serviceName}: Response not OK:`, response.status, response.statusText);
-      throw await handleElevenLabsError(response, serviceName);
-    }
-    const data = await response.json();
-    return data.voices.map((voice: any) => ({ 
-        voice_id: voice.voice_id,
-        name: voice.name,
-        category: voice.category,
-        labels: voice.labels,
-    })) as ElevenLabsVoice[];
-  } catch (error) {
-    console.error(`${serviceName} Error:`, error);
-    if (error instanceof Error) throw error;
-    throw new Error(`An unknown error occurred while ${serviceName}.`);
-  }
-}
 
-export async function generateSpeech(apiKey: string | null, voiceId: string, text: string): Promise<Blob> {
-  const serviceName = "Generate Speech";
-  if (!apiKey) {
-    console.error(`${serviceName}: API key is not provided.`);
-    throw new Error('ElevenLabs API key is not provided for speech generation.');
-  }
+  const url = `${API_URL}/${voiceId}`;
+
+  const headers = new Headers();
+  headers.append('Accept', 'audio/mpeg');
+  headers.append(XI_API_KEY_HEADER, apiKey);
+  headers.append('Content-Type', 'application/json');
+
+  const body = JSON.stringify({
+    text: text,
+    model_id: 'eleven_multilingual_v2',
+    voice_settings: {
+      stability: 0.5,
+      similarity_boost: 0.75,
+      style: 0.0, // Default style
+      use_speaker_boost: true,
+    },
+  });
+
   try {
-    const response = await fetch(`${BASE_URL}/text-to-speech/${voiceId}`, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'xi-api-key': apiKey,
-        'Accept': 'audio/mpeg',
-      },
-      body: JSON.stringify({
-        text: text,
-        model_id: 'eleven_multilingual_v2', 
-        voice_settings: {
-          stability: 0.6,
-          similarity_boost: 0.8,
-          style: 0.4, 
-          use_speaker_boost: true,
-        },
-      }),
+      headers: headers,
+      body: body,
     });
 
     if (!response.ok) {
-      throw await handleElevenLabsError(response, serviceName);
+      let errorDetails = `Status: ${response.status}`;
+      try {
+        const errorJson = await response.json();
+        errorDetails += `, Message: ${JSON.stringify(errorJson)}`;
+      } catch (e) {
+        const errorText = await response.text();
+        errorDetails += `, Body: ${errorText}`;
+      }
+      throw new Error(`ElevenLabs API request failed. ${errorDetails}`);
     }
-    return response.blob();
+
+    const audioBlob = await response.blob();
+    return audioBlob;
+
   } catch (error) {
-    console.error(`${serviceName} Error:`, error);
-    if (error instanceof Error) throw error;
-    throw new Error(`An unknown error occurred while ${serviceName}.`);
+    console.error('Error in generateAudio:', error);
+    throw error; 
   }
+}
+
+/**
+ * Fetches the list of available voices from the ElevenLabs API.
+ * Legacy function name for compatibility with VoiceSettingsModal
+ */
+export async function fetchAvailableElevenLabsVoices(apiKey: string): Promise<any> {
+    return getVoices(apiKey);
+}
+
+/**
+ * Fetches the list of available voices from the ElevenLabs API.
+ *
+ * @param {string} apiKey The ElevenLabs API key.
+ * @returns {Promise<any>} A promise that resolves with the list of voices.
+ * @throws {Error} If the API request fails.
+ */
+export async function getVoices(apiKey: string): Promise<any> {
+    if (!apiKey) {
+        throw new Error('API key is required.');
+    }
+
+    const url = 'https://api.elevenlabs.io/v1/voices';
+    const headers = new Headers();
+    headers.append(XI_API_KEY_HEADER, apiKey);
+
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: headers,
+        });
+
+        if (!response.ok) {
+            let errorDetails = `Status: ${response.status}`;
+            try {
+                const errorJson = await response.json();
+                errorDetails += `, Message: ${JSON.stringify(errorJson)}`;
+            } catch (e) {
+                const errorText = await response.text();
+                errorDetails += `, Body: ${errorText}`;
+            }
+            throw new Error(`ElevenLabs API request to get voices failed. ${errorDetails}`);
+        }
+
+        const voicesData = await response.json();
+        return voicesData.voices;
+
+    } catch (error) {
+        console.error('Error in getVoices:', error);
+        throw error;
+    }
 }

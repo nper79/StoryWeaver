@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Quick Beat Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; background: #f0f0f0; }
+        .speaker { font-weight: bold; color: blue; }
+    </style>
+</head>
+<body>
+    <h1>Quick Beat Parsing Test</h1>
+    <div id="output"></div>
+
+    <script>
+        // Simple test
+        const text = 'Lucy walks into the kitchen. "Mom, have you seen Whiskers?" she asks. Her mother looks up from cooking. "No dear, I haven\'t seen him today."';
+        
+        // Find quotes
+        const quotes = [];
+        const regex = /"([^"]*)"/g;
+        let match;
+        
+        while ((match = regex.exec(text)) !== null) {
+            const beforeQuote = text.substring(0, match.index);
+            const afterQuote = text.substring(match.index + match[0].length, match.index + match[0].length + 50);
+            
+            let speaker = 'Unknown';
+            
+            // Check if "her mother" appears before the second quote
+            if (beforeQuote.includes('Her mother looks up')) {
+                speaker = 'Mother';
+            } else if (beforeQuote.includes('Lucy') && !beforeQuote.includes('mother')) {
+                speaker = 'Lucy';
+            }
+            
+            quotes.push({
+                text: match[1],
+                speaker: speaker,
+                before: beforeQuote.slice(-30),
+                after: afterQuote
+            });
+        }
+        
+        document.getElementById('output').innerHTML = quotes.map((q, i) => 
+            `<div class="result">
+                <div class="speaker">Quote ${i+1}: ${q.speaker}</div>
+                <div>"${q.text}"</div>
+                <small>Context before: ...${q.before}</small>
+            </div>`
+        ).join('');
+        
+        console.log('Quotes found:', quotes);
+    </script>
+</body>
+</html>

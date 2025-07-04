@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Quote Parsing</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test { background: #f0f0f0; padding: 10px; margin: 10px 0; }
+        .result { background: #e0ffe0; padding: 5px; margin: 5px 0; }
+        .error { background: #ffe0e0; padding: 5px; margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <h1>Test Quote Parsing</h1>
+    <div id="output"></div>
+
+    <script>
+        // Test the regex pattern
+        function testQuoteRegex() {
+            const output = document.getElementById('output');
+            
+            // Test cases
+            const testCases = [
+                "Lucy comes home from school. She calls her cat. 'Whiskers! I'm home! Where are you?'",
+                'He said "I\'m going home" and left.',
+                "She whispered 'Don't worry, it'll be fine' to her friend.",
+                'The cat meowed "Meow!" loudly.'
+            ];
+            
+            // Fixed regex pattern
+            const quoteRegex = /(['"])((?:[^'"\\]|\\.|(?!\1)['"])*)\1/g;
+            
+            testCases.forEach((testCase, index) => {
+                const testDiv = document.createElement('div');
+                testDiv.className = 'test';
+                testDiv.innerHTML = `<strong>Test ${index + 1}:</strong> ${testCase}`;
+                
+                const matches = [];
+                let match;
+                const regex = new RegExp(quoteRegex.source, quoteRegex.flags);
+                
+                while ((match = regex.exec(testCase)) !== null) {
+                    matches.push({
+                        fullMatch: match[0],
+                        quote: match[1],
+                        content: match[2],
+                        startIndex: match.index,
+                        endIndex: match.index + match[0].length
+                    });
+                }
+                
+                const resultDiv = document.createElement('div');
+                if (matches.length > 0) {
+                    resultDiv.className = 'result';
+                    resultDiv.innerHTML = `<strong>Found ${matches.length} quote(s):</strong><br>` +
+                        matches.map(m => `• "${m.content}" (${m.startIndex}-${m.endIndex})`).join('<br>');
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.innerHTML = '<strong>No quotes found!</strong>';
+                }
+                
+                output.appendChild(testDiv);
+                output.appendChild(resultDiv);
+            });
+        }
+        
+        // Run test when page loads
+        window.onload = testQuoteRegex;
+    </script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import SceneBlock from './SceneBlock';
 import ConnectionArrow from './ConnectionArrow';
 import Modal from './Modal';
 import { ARROW_HEAD_ID, DEFAULT_SCENE_MIN_HEIGHT, DEFAULT_SCENE_WIDTH, WORLD_WIDTH, WORLD_HEIGHT } from '../constants';
+import type { LanguageLevel } from '../services/textRewriteService';
 
 interface CanvasViewProps {
   storyData: StoryData;
@@ -22,6 +23,18 @@ interface CanvasViewProps {
   onUpdateConnectionLabel: (connectionId: string, newLabel: string) => void; // New
   onGenerateSceneImageForScene?: (sceneId: string) => void; // New prop for image generation
   generatingImageForScene: string | null; // New prop for loading state
+  onContinueWithAI?: (sceneId: string) => void; // AI continuation with single path
+  onContinueWithAI2Options?: (sceneId: string) => void; // AI continuation with 2 choices
+  onContinueWithAI3Options?: (sceneId: string) => void; // AI continuation with 3 choices
+  generatingContinuationForScene: string | null; // AI generation loading state
+  onRewriteText?: (sceneId: string, level: LanguageLevel) => void; // Text rewriting
+  rewritingTextForScene: string | null; // Rewriting loading state
+  onSubdivideIntoBeats?: (sceneId: string) => void; // Beat subdivision
+  subdividingSceneIntoBeats: string | null; // Beat subdivision loading state
+  onGenerateBeatImage?: (sceneId: string, beatId: string) => void; // Beat image generation
+  onGenerateAllBeatImages?: (sceneId: string) => void; // Bulk beat image generation
+  onUploadBeatVideo?: (sceneId: string, beatId: string, videoFile: File) => void; // Beat video upload
+  generatingBeatImageFor: { sceneId: string; beatId: string } | null; // Beat image loading state
 }
 
 const CanvasView: React.FC<CanvasViewProps> = ({
@@ -41,6 +54,18 @@ const CanvasView: React.FC<CanvasViewProps> = ({
   onUpdateConnectionLabel, // Destructure new prop
   onGenerateSceneImageForScene, // Destructure new prop
   generatingImageForScene, // Destructure new prop
+  onContinueWithAI, // Destructure new prop
+  onContinueWithAI2Options, // Destructure new prop
+  onContinueWithAI3Options, // Destructure new prop
+  generatingContinuationForScene, // Destructure new prop
+  onRewriteText, // Destructure new prop
+  rewritingTextForScene, // Destructure new prop
+  onSubdivideIntoBeats, // Destructure new prop
+  subdividingSceneIntoBeats, // Destructure new prop
+  onGenerateBeatImage, // Destructure new prop
+  onGenerateAllBeatImages, // Destructure new prop
+  onUploadBeatVideo, // Destructure new prop
+  generatingBeatImageFor, // Destructure new prop
 }) => {
   const { scenes, connections } = storyData;
   const [draggingSceneBody, setDraggingSceneBody] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
@@ -219,30 +244,48 @@ const CanvasView: React.FC<CanvasViewProps> = ({
         <svg 
           width={WORLD_WIDTH} 
           height={WORLD_HEIGHT} 
-          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 5 }}
+          style={{ 
+            position: 'absolute', 
+            top: 0, 
+            left: 0, 
+            pointerEvents: 'none', 
+            zIndex: 10,
+            overflow: 'visible'
+          }}
         >
           <defs>
             <marker
               id={ARROW_HEAD_ID}
-              markerWidth="10"
-              markerHeight="7"
-              refX="8" 
-              refY="3.5"
+              markerWidth="12"
+              markerHeight="9"
+              refX="10" 
+              refY="4.5"
               orient="auto"
               markerUnits="strokeWidth"
             >
-              <polygon points="0 0, 10 3.5, 0 7" fill="#38bdf8" />
+              <polygon points="0 0, 12 4.5, 0 9" fill="#38bdf8" />
             </marker>
           </defs>
-          {connections.map((conn) => (
-            <ConnectionArrow
-              key={conn.id}
-              connection={conn}
-              scenes={scenes}
-              onDelete={onDeleteConnection}
-              isSelected={false} 
-            />
-          ))}
+          <g style={{ pointerEvents: 'auto' }}>
+            {connections.map((conn) => {
+              // Group connections by source scene to calculate offsets
+              const connectionsFromSameSource = connections.filter(c => c.fromSceneId === conn.fromSceneId);
+              const connectionIndex = connectionsFromSameSource.findIndex(c => c.id === conn.id);
+              const totalConnections = connectionsFromSameSource.length;
+              
+              return (
+                <ConnectionArrow
+                  key={conn.id}
+                  connection={conn}
+                  scenes={scenes}
+                  onDelete={onDeleteConnection}
+                  isSelected={false}
+                  connectionIndex={connectionIndex}
+                  totalConnections={totalConnections}
+                />
+              );
+            })}
+          </g>
           {isConnecting && connectionDragSource && connectionPreviewEndPoint && (
             <line
               x1={connectionDragSource.portPosition.x}
@@ -278,6 +321,18 @@ const CanvasView: React.FC<CanvasViewProps> = ({
             onDeleteConnection={onDeleteConnection} // Pass existing prop
             onGenerateSceneImage={onGenerateSceneImageForScene} // Pass new prop
             generatingImageForScene={generatingImageForScene} // Pass new prop
+            onContinueWithAI={onContinueWithAI} // Pass new prop
+            onContinueWithAI2Options={onContinueWithAI2Options} // Pass new prop
+            onContinueWithAI3Options={onContinueWithAI3Options} // Pass new prop
+            generatingContinuationForScene={generatingContinuationForScene} // Pass new prop
+            onRewriteText={onRewriteText} // Pass new prop
+            rewritingTextForScene={rewritingTextForScene} // Pass new prop
+            onSubdivideIntoBeats={onSubdivideIntoBeats} // Pass new prop
+            subdividingSceneIntoBeats={subdividingSceneIntoBeats} // Pass new prop
+            onGenerateBeatImage={onGenerateBeatImage} // Pass new prop
+            onGenerateAllBeatImages={onGenerateAllBeatImages} // Pass new prop
+            onUploadBeatVideo={onUploadBeatVideo} // Pass new prop
+            generatingBeatImageFor={generatingBeatImageFor} // Pass new prop
           />
         ))}
       </div>

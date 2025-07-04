@@ -37,15 +37,32 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
 
     // Create folders for assets
     const imagesFolder = zip.folder('images');
+    const videosFolder = zip.folder('videos');
     const audioFolder = zip.folder('audio');
 
-    // Collect all image IDs from the story
+    // Collect all image IDs and video IDs from the story
     const imageIds = new Set<string>();
+    const videoIds = new Set<string>();
     
     // Add scene images
     storyData.scenes.forEach((scene: Scene) => {
       if (scene.generatedImageId) {
+        console.log(`[Export] Found scene image: ${scene.title} -> ${scene.generatedImageId}`);
         imageIds.add(scene.generatedImageId);
+      }
+      
+      // Add beat images and videos if scene has beats
+      if (scene.beats && Array.isArray(scene.beats)) {
+        scene.beats.forEach((beat, beatIndex) => {
+          if (beat.imageId) {
+            console.log(`[Export] Found beat image: ${scene.title} beat ${beatIndex + 1} -> ${beat.imageId}`);
+            imageIds.add(beat.imageId);
+          }
+          if (beat.videoId) {
+            console.log(`[Export] Found beat video: ${scene.title} beat ${beatIndex + 1} -> ${beat.videoId}`);
+            videoIds.add(beat.videoId);
+          }
+        });
       }
     });
 
@@ -53,13 +70,19 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
     const voiceAssignments = storyData.voiceAssignments || [];
     voiceAssignments.forEach((va: VoiceAssignment) => {
       if (va.imageId) {
+        console.log(`[Export] Found character image: ${va.characterName} -> ${va.imageId}`);
         imageIds.add(va.imageId);
       }
     });
 
+    console.log(`[Export] Total images to export: ${imageIds.size}`);
+    console.log(`[Export] Total videos to export: ${videoIds.size}`);
+
     // Export all images
+    let exportedImageCount = 0;
     for (const imageId of imageIds) {
       try {
+        console.log(`[Export] Attempting to export image: ${imageId}`);
         const imageDataUrl = await getImageFromStorage(imageId);
         if (imageDataUrl && imagesFolder) {
           // Convert data URL to blob for ZIP storage
@@ -67,11 +90,43 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
           // Determine file extension based on data URL
           const extension = imageDataUrl.includes('data:image/png') ? 'png' : 'jpg';
           imagesFolder.file(`${imageId}.${extension}`, imageBlob);
+          exportedImageCount++;
+          console.log(`[Export] Successfully exported image: ${imageId}.${extension}`);
+        } else {
+          console.warn(`[Export] Image not found in storage: ${imageId}`);
         }
       } catch (error) {
         console.warn(`Failed to export image ${imageId}:`, error);
       }
     }
+    
+    console.log(`[Export] Successfully exported ${exportedImageCount} out of ${imageIds.size} images`);
+
+    // Export all videos
+    let exportedVideoCount = 0;
+    for (const videoId of videoIds) {
+      try {
+        console.log(`[Export] Attempting to export video: ${videoId}`);
+        const videoDataUrl = await getImageFromStorage(videoId); // Reuse storage system
+        if (videoDataUrl && videosFolder) {
+          // Convert data URL to blob for ZIP storage
+          const videoBlob = dataURLToBlob(videoDataUrl);
+          // Determine file extension based on data URL (videos are typically mp4)
+          const extension = videoDataUrl.includes('data:video/mp4') ? 'mp4' : 
+                           videoDataUrl.includes('data:video/webm') ? 'webm' : 
+                           videoDataUrl.includes('data:video/avi') ? 'avi' : 'mp4';
+          videosFolder.file(`${videoId}.${extension}`, videoBlob);
+          exportedVideoCount++;
+          console.log(`[Export] Successfully exported video: ${videoId}.${extension}`);
+        } else {
+          console.warn(`[Export] Video not found in storage: ${videoId}`);
+        }
+      } catch (error) {
+        console.warn(`Failed to export video ${videoId}:`, error);
+      }
+    }
+    
+    console.log(`[Export] Successfully exported ${exportedVideoCount} out of ${videoIds.size} videos`);
 
     // Export audio files (if they exist in localStorage)
     storyData.scenes.forEach((scene: Scene) => {
@@ -111,8 +166,13 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
  */
 export async function importStoryFromZip(file: File): Promise<StoryData> {
   try {
+    console.log(`[Import] Starting ZIP import process for file: ${file.name} (${file.size} bytes)`);
     const zip = new JSZip();
     const zipContent = await zip.loadAsync(file);
+    
+    // Debug: List all files in the ZIP
+    const allFiles = Object.keys(zipContent.files);
+    console.log(`[Import] ZIP contains ${allFiles.length} files:`, allFiles);
 
     // Read the story data
     const storyFile = zipContent.file('story.json');
@@ -130,6 +190,7 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
 
     // Generate new IDs to avoid conflicts
     const oldToNewImageIds = new Map<string, string>();
+    const oldToNewVideoIds = new Map<string, string>();
     const oldToNewSceneIds = new Map<string, string>();
 
     // Import images
@@ -147,11 +208,54 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
           const newImageId = `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
           
           // Store image in IndexedDB with new ID
-          await saveImageToStorage(newImageId, imageBlob);
+          await saveImageBlobToStorage(newImageId, imageBlob);
           oldToNewImageIds.set(oldImageId, newImageId);
         }
       }
     }
+
+    // Import videos - Use direct file enumeration
+    console.log(`[Import] Searching for video files in ZIP...`);
+    const videoFiles = allFiles.filter(name => 
+      name.startsWith('videos/') && !name.endsWith('/') && 
+      (name.endsWith('.mp4') || name.endsWith('.webm') || name.endsWith('.avi') || name.endsWith('.mov'))
+    );
+    
+    console.log(`[Import] Found ${videoFiles.length} video files:`, videoFiles);
+
+    for (const videoPath of videoFiles) {
+      const videoFile = zipContent.file(videoPath);
+      if (videoFile) {
+        const videoBlob = await videoFile.async('blob');
+        const oldVideoId = videoPath.split('/')[1].split('.')[0]; // Extract ID from filename
+        const newVideoId = `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Fix MIME type if missing
+        const fileExtension = videoPath.split('.').pop()?.toLowerCase();
+        let correctedBlob = videoBlob;
+        if (!videoBlob.type || videoBlob.type === 'application/octet-stream') {
+          const mimeType = fileExtension === 'mp4' ? 'video/mp4' : 
+                          fileExtension === 'webm' ? 'video/webm' : 
+                          fileExtension === 'avi' ? 'video/avi' : 'video/mp4';
+          correctedBlob = new Blob([videoBlob], { type: mimeType });
+          console.log(`[Import] Corrected MIME type from '${videoBlob.type}' to '${mimeType}'`);
+        }
+        
+        console.log(`[Import] Processing video: ${videoPath}`);
+        console.log(`[Import] - Old ID: ${oldVideoId}`);
+        console.log(`[Import] - New ID: ${newVideoId}`);
+        console.log(`[Import] - Blob size: ${correctedBlob.size} bytes`);
+        console.log(`[Import] - Blob type: ${correctedBlob.type}`);
+        
+        // Store video in IndexedDB with new ID (reuse image storage system)
+        await saveImageBlobToStorage(newVideoId, correctedBlob);
+        oldToNewVideoIds.set(oldVideoId, newVideoId);
+        
+        console.log(`[Import] ✅ Video imported successfully: ${oldVideoId} -> ${newVideoId}`);
+      }
+    }
+    
+    console.log(`[Import] Video ID mapping:`, Object.fromEntries(oldToNewVideoIds));
 
     // Update story with new IDs
     const updatedStory: StoryData = { ...backupData.story };
@@ -161,12 +265,45 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
       const newSceneId = `scene_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       oldToNewSceneIds.set(scene.id, newSceneId);
       
+      // Update beat images and videos with new IDs if scene has beats
+      let updatedBeats = scene.beats;
+      if (scene.beats && Array.isArray(scene.beats)) {
+        console.log(`[Import] Processing ${scene.beats.length} beats for scene: ${scene.title}`);
+        updatedBeats = scene.beats.map((beat, beatIndex) => {
+          const oldVideoId = beat.videoId;
+          const oldImageId = beat.imageId;
+          
+          const newImageId = beat.imageId && oldToNewImageIds.has(beat.imageId)
+            ? oldToNewImageIds.get(beat.imageId)
+            : beat.imageId;
+            
+          const newVideoId = beat.videoId && oldToNewVideoIds.has(beat.videoId)
+            ? oldToNewVideoIds.get(beat.videoId)
+            : beat.videoId;
+          
+          console.log(`[Import] Beat ${beatIndex + 1}:`, {
+            oldImageId,
+            newImageId,
+            oldVideoId,
+            newVideoId,
+            hasVideoMapping: oldVideoId ? oldToNewVideoIds.has(oldVideoId) : false
+          });
+          
+          return {
+            ...beat,
+            imageId: newImageId,
+            videoId: newVideoId
+          };
+        });
+      }
+      
       return {
         ...scene,
         id: newSceneId,
         generatedImageId: scene.generatedImageId && oldToNewImageIds.has(scene.generatedImageId)
           ? oldToNewImageIds.get(scene.generatedImageId)
-          : scene.generatedImageId
+          : scene.generatedImageId,
+        beats: updatedBeats
       };
     });
 
@@ -225,6 +362,75 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
   }
 }
 
+// Helper function to save blob as image/video in the same IndexedDB structure
+async function saveImageBlobToStorage(imageId: string, blob: Blob): Promise<void> {
+  const DB_NAME = 'StoryWeaverImages';
+  const DB_VERSION = 1;
+  const IMAGES_STORE = 'images';
+  
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    
+    request.onerror = () => reject(request.error);
+    
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction([IMAGES_STORE], 'readwrite');
+      const store = transaction.objectStore(IMAGES_STORE);
+      
+      // Determine file type and extension based on blob type or imageId prefix
+      const isVideo = imageId.startsWith('vid_') || blob.type.startsWith('video/');
+      const isImage = imageId.startsWith('img_') || blob.type.startsWith('image/');
+      
+      let filename: string;
+      let type: string;
+      
+      if (isVideo) {
+        // For videos, determine extension from blob type
+        const extension = blob.type.includes('mp4') ? 'mp4' : 
+                         blob.type.includes('webm') ? 'webm' : 
+                         blob.type.includes('avi') ? 'avi' : 'mp4';
+        filename = `${imageId}.${extension}`;
+        type = 'video';
+      } else {
+        // For images, determine extension from blob type
+        const extension = blob.type.includes('png') ? 'png' : 'jpg';
+        filename = `${imageId}.${extension}`;
+        type = 'scene';
+      }
+      
+      console.log(`[Storage] Saving ${type}: ${filename} (${blob.type})`);
+      
+      const imageData = {
+        id: imageId,
+        filename: filename,
+        data: blob,
+        type: type,
+        timestamp: Date.now()
+      };
+      
+      const addRequest = store.put(imageData);
+      addRequest.onsuccess = () => {
+        console.log(`[Storage] Successfully saved ${type}: ${filename}`);
+        resolve();
+      };
+      addRequest.onerror = () => {
+        console.error(`[Storage] Failed to save ${type}: ${filename}`, addRequest.error);
+        reject(addRequest.error);
+      };
+    };
+    
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IMAGES_STORE)) {
+        const store = db.createObjectStore(IMAGES_STORE, { keyPath: 'id' });
+        store.createIndex('type', 'type', { unique: false });
+        store.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+    };
+  });
+}
+
 // Helper functions
 function dataURLToBlob(dataURL: string): Blob {
   const arr = dataURL.split(',');
@@ -244,38 +450,5 @@ function blobToDataURL(blob: Blob): Promise<string> {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = reject;
     reader.readAsDataURL(blob);
-  });
-}
-
-// Import the saveImageToStorage function from fileStorageService
-async function saveImageToStorage(imageId: string, blob: Blob): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('ImageStorage', 1);
-    
-    request.onerror = () => reject(request.error);
-    
-    request.onsuccess = () => {
-      const db = request.result;
-      const transaction = db.transaction(['images'], 'readwrite');
-      const store = transaction.objectStore('images');
-      
-      const imageData = {
-        id: imageId,
-        blob: blob,
-        timestamp: Date.now()
-      };
-      
-      const addRequest = store.put(imageData);
-      addRequest.onsuccess = () => resolve();
-      addRequest.onerror = () => reject(addRequest.error);
-    };
-    
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains('images')) {
-        const store = db.createObjectStore('images', { keyPath: 'id' });
-        store.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-    };
   });
 }
