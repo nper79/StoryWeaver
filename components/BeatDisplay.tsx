@@ -232,7 +232,9 @@ const BeatDisplay: React.FC<BeatDisplayProps> = ({
             <p className="text-slate-200 leading-relaxed whitespace-pre-line flex-grow">
               {beat.text.replace(/\[[^\]]+\]/g, '').trim()}
             </p>
-            {/* Show remove annotations button only if text contains speaker annotations */}
+            {/* Remove Annotations button removed by default per user request */}
+            {/* Uncomment below if you need to remove speaker annotations manually */}
+            {/*
             {beat.text.includes('[') && beat.text.includes(']') && (
               <button
                 onClick={() => {
@@ -245,6 +247,7 @@ const BeatDisplay: React.FC<BeatDisplayProps> = ({
                 🗑️ Remove Annotations
               </button>
             )}
+            */}
           </div>
         </div>
 

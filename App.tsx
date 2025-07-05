@@ -7,6 +7,8 @@ import PlayModal from './components/PlayModal';
 import VoiceSettingsModal from './components/VoiceSettingsModal';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { TranslationService } from './services/translationService';
+import { generateAudioWithAlignment } from './elevenLabsService';
+
 
 
 import { 
@@ -60,6 +62,8 @@ const App: React.FC = () => {
   const [voiceAssignments, setVoiceAssignments] = useState<VoiceAssignment[]>([]);
   const [narratorVoiceId, setNarratorVoiceId] = useState<string | null>(null);
   const [narratorVoiceAssignments, setNarratorVoiceAssignments] = useState<NarratorVoiceAssignments>({});
+  const [translations, setTranslations] = useState<Translation[]>([]);
+  const [currentLanguage, setCurrentLanguage] = useState<string>('en');
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState<boolean>(false);
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null);
   const [openaiApiKey, setOpenaiApiKey] = useState<string | null>(null);
@@ -69,7 +73,7 @@ const App: React.FC = () => {
   const [generatingContinuationForScene, setGeneratingContinuationForScene] = useState<string | null>(null);
   const [isBulkGeneratingImages, setIsBulkGeneratingImages] = useState<boolean>(false);
   const [bulkImageProgress, setBulkImageProgress] = useState<number>(0);
-  const [isMigratingBeats, setIsMigratingBeats] = useState<boolean>(false);
+  const [isDownloadingAudio, setIsDownloadingAudio] = useState<boolean>(false);
   const [rewritingTextForScene, setRewritingTextForScene] = useState<string | null>(null);
   const [subdividingSceneIntoBeats, setSubdividingSceneIntoBeats] = useState<string | null>(null);
   const [generatingBeatImageFor, setGeneratingBeatImageFor] = useState<{ sceneId: string; beatId: string } | null>(null);
@@ -270,7 +274,16 @@ const App: React.FC = () => {
 
   useEffect(() => {
     try {
-      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments, narratorVoiceId: narratorVoiceId || undefined };
+      const storyData: StoryData = { 
+        scenes, 
+        connections, 
+        startSceneId, 
+        voiceAssignments, 
+        narratorVoiceId: narratorVoiceId || undefined,
+        narratorVoiceAssignments,
+        translations,
+        currentLanguage
+      };
       localStorage.setItem(STORY_DATA_LOCAL_STORAGE_KEY, JSON.stringify(storyData));
       if (startSceneId) {
           localStorage.setItem(INITIAL_START_SCENE_ID_KEY, startSceneId);
@@ -464,6 +477,13 @@ const App: React.FC = () => {
   };
 
   const handleLoad = (data: StoryData) => {
+    console.log('[Load] Processing imported story data:', {
+      scenes: data.scenes?.length || 0,
+      translations: data.translations?.length || 0,
+      currentLanguage: data.currentLanguage || 'en',
+      narratorVoiceAssignments: data.narratorVoiceAssignments || {}
+    });
+    
     setScenes(data.scenes?.map(s => ({
       ...s, 
       generatedImagePrompt: s.generatedImagePrompt || undefined,
@@ -474,9 +494,39 @@ const App: React.FC = () => {
     setConnections(data.connections || []);
     setStartSceneId(data.startSceneId || null);
     setVoiceAssignments(data.voiceAssignments || []);
+    
+    // Process imported translations and language settings
+    if (data.translations && data.translations.length > 0) {
+      console.log('[Load] Setting translations:', data.translations.length);
+      setTranslations(data.translations);
+    } else {
+      console.log('[Load] No translations found, clearing existing translations');
+      setTranslations([]);
+    }
+    
+    if (data.currentLanguage && data.currentLanguage !== 'en') {
+      console.log('[Load] Setting current language:', data.currentLanguage);
+      setCurrentLanguage(data.currentLanguage);
+    } else {
+      console.log('[Load] No current language specified, resetting to English');
+      setCurrentLanguage('en');
+    }
+    
+    if (data.narratorVoiceAssignments) {
+      console.log('[Load] Setting narrator voice assignments:', data.narratorVoiceAssignments);
+      setNarratorVoiceAssignments(data.narratorVoiceAssignments);
+    }
+    
     setActiveSceneId(null); 
     setZoomLevel(DEFAULT_ZOOM); 
-    setTimeout(() => alert('Story loaded successfully! Zoom has been reset. You may need to scroll or use "Organize Flow" to locate all scenes.'), 100);
+    
+    const hasTranslations = data.translations && data.translations.length > 0;
+    const language = data.currentLanguage || 'en';
+    const message = hasTranslations 
+      ? `Story loaded successfully with ${data.translations.length} translations in ${language.toUpperCase()}! Language has been set to ${language.toUpperCase()}.`
+      : 'Story loaded successfully! Zoom has been reset. You may need to scroll or use "Organize Flow" to locate all scenes.';
+    
+    setTimeout(() => alert(message), 100);
   };
 
   const handleZoomIn = () => {
@@ -1963,9 +2013,172 @@ const App: React.FC = () => {
     }
   };
 
-  // Add translation state management
-  const [translations, setTranslations] = useState<Translation[]>([]);
-  const [currentLanguage, setCurrentLanguage] = useState<string>('en');
+  // Download all audio functionality
+  const handleDownloadAllAudio = async () => {
+    if (!elevenLabsApiKey) {
+      alert('Please set your ElevenLabs API key in Settings first.');
+      return;
+    }
+
+    // Get all available languages (English + translations)
+    const availableLanguages = ['en', ...new Set(translations.map(t => t.language))];
+    
+    if (availableLanguages.length === 0) {
+      alert('No languages available for audio download.');
+      return;
+    }
+
+    // Confirm with user
+    const confirmed = confirm(
+      `This will download and cache audio for all beats in ${availableLanguages.length} language(s): ${availableLanguages.join(', ')}. ` +
+      `This may take several minutes and use API credits. Continue?`
+    );
+    
+    if (!confirmed) return;
+
+    setIsDownloadingAudio(true);
+    let totalProcessed = 0;
+    let totalSuccess = 0;
+    let totalErrors = 0;
+
+    try {
+      console.log(`[Audio Download] Starting download for ${availableLanguages.length} languages`);
+      
+      for (const language of availableLanguages) {
+        console.log(`[Audio Download] Processing language: ${language}`);
+        
+        // Get scenes for this language
+        const scenesToProcess = language === 'en' ? scenes : scenes.map(scene => {
+          const translation = translations.find(t => t.sceneId === scene.id && t.language === language);
+          if (translation) {
+            return {
+              ...scene,
+              title: translation.title,
+              content: translation.content,
+              beats: translation.beats || scene.beats
+            };
+          }
+          return scene;
+        });
+        
+        // Process each scene's beats
+        for (const scene of scenesToProcess) {
+          if (!scene.beats || scene.beats.length === 0) continue;
+          
+          console.log(`[Audio Download] Processing scene "${scene.title}" (${scene.beats.length} beats)`);
+          
+          for (const beat of scene.beats) {
+            if (!beat.text) continue;
+            
+            totalProcessed++;
+            
+            try {
+              // Generate unique audio ID for this beat + language combination
+              const audioId = `audio_${scene.id}_${beat.id}_${language}`;
+              
+              // Check if audio already exists in localStorage
+              const existingAudio = localStorage.getItem(audioId);
+              if (existingAudio) {
+                console.log(`[Audio Download] Audio already cached for beat ${beat.id} in ${language}`);
+                totalSuccess++;
+                continue;
+              }
+              
+              // Parse beat text to identify speakers and generate audio
+              const beatParts = beat.text.includes('[') && beat.text.includes(']') 
+                ? parseBeatText(beat.text)
+                : [{ text: beat.text, speaker: 'Narrator' }];
+              
+              for (const part of beatParts) {
+                if (!part.text.trim()) continue;
+                
+                // Get voice for this speaker and language
+                let voiceId: string | undefined;
+                
+                if (part.speaker === 'Narrator') {
+                  voiceId = narratorVoiceAssignments[language] || narratorVoiceId || undefined;
+                } else {
+                  // Find character voice assignment
+                  const profile = voiceAssignments.find(va => 
+                    va.characterName.toLowerCase() === part.speaker.toLowerCase()
+                  );
+                  voiceId = profile?.voiceId;
+                }
+                
+                if (!voiceId) {
+                  console.warn(`[Audio Download] No voice found for speaker ${part.speaker} in ${language}`);
+                  continue;
+                }
+                
+                // Generate audio using ElevenLabs
+                const audioResponse = await generateAudioWithAlignment(part.text, voiceId, elevenLabsApiKey);
+                
+                if (audioResponse && audioResponse.audio) {
+                  const audioBlob = audioResponse.audio;
+                  // Convert to data URL and store
+                  const dataURL = await new Promise<string>((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.readAsDataURL(audioBlob);
+                  });
+                  
+                  // Store in localStorage with unique ID
+                  const partAudioId = `${audioId}_${part.speaker}_${Date.now()}`;
+                  localStorage.setItem(partAudioId, dataURL);
+                  
+                  console.log(`[Audio Download] Cached audio for ${part.speaker} in ${language}`);
+                  totalSuccess++;
+                } else {
+                  throw new Error('Failed to generate audio');
+                }
+              }
+              
+              // Add small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              console.error(`[Audio Download] Error processing beat ${beat.id} in ${language}:`, errorMessage);
+              console.error(`[Audio Download] Full error details:`, error);
+              totalErrors++;
+            }
+          }
+        }
+      }
+      
+      const message = `Audio download complete!\n` +
+        `Processed: ${totalProcessed} beats\n` +
+        `Success: ${totalSuccess}\n` +
+        `Errors: ${totalErrors}\n` +
+        `Languages: ${availableLanguages.join(', ')}`;
+      
+      alert(message);
+      console.log('[Audio Download] Complete:', { totalProcessed, totalSuccess, totalErrors });
+      
+    } catch (error) {
+      console.error('[Audio Download] Fatal error:', error);
+      alert(`Audio download failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsDownloadingAudio(false);
+    }
+  };
+
+  // Helper function to parse beat text with speaker annotations
+  const parseBeatText = (text: string): { text: string; speaker: string }[] => {
+    const parts: { text: string; speaker: string }[] = [];
+    const regex = /\[([^\]]+)\]([^\[]*)/g;
+    let match;
+    
+    while ((match = regex.exec(text)) !== null) {
+      const speaker = match[1];
+      const content = match[2].trim();
+      if (content) {
+        parts.push({ text: content, speaker });
+      }
+    }
+    
+    return parts.length > 0 ? parts : [{ text, speaker: 'Narrator' }];
+  };
 
   // Translation management functions
   const handleAddTranslation = (translation: Translation) => {
@@ -1995,10 +2208,6 @@ const App: React.FC = () => {
   };
 
   return (
-    <LanguageProvider 
-      initialLanguage={currentLanguage}
-      initialTranslations={translations}
-    >
       <div className="flex flex-col h-screen bg-slate-900">
         <Toolbar
           onAddScene={addScene}
@@ -2016,8 +2225,11 @@ const App: React.FC = () => {
           isBulkGeneratingImages={isBulkGeneratingImages}
           bulkImageProgress={bulkImageProgress}
           onOpenSettings={() => setIsVoiceSettingsOpen(true)}
-          onMigrateBeats={handleMigrateBeats}
-          isMigratingBeats={isMigratingBeats}
+          onDownloadAllAudio={handleDownloadAllAudio}
+          isDownloadingAudio={isDownloadingAudio}
+          currentLanguage={currentLanguage}
+          translations={translations}
+          onLanguageChange={setCurrentLanguage}
         />
         <div className="flex-1 relative overflow-hidden">
           <CanvasView
@@ -2028,7 +2240,6 @@ const App: React.FC = () => {
             onDeleteConnection={deleteConnection}
             setActiveSceneId={setActiveSceneId}
             activeSceneId={activeSceneId}
-            onSceneSelect={setActiveSceneId}
             zoomLevel={zoomLevel}
             onGenerateSceneImageForScene={generateSceneImageForScene}
             generatingImageForScene={generatingImageForScene}
@@ -2044,6 +2255,8 @@ const App: React.FC = () => {
             onGenerateAllBeatImages={handleGenerateAllBeatImages}
             onUploadBeatVideo={handleUploadBeatVideo}
             generatingBeatImageFor={generatingBeatImageFor}
+            currentLanguage={currentLanguage}
+            translations={translations}
           />
           <ZoomControls
             zoomLevel={zoomLevel}
@@ -2059,6 +2272,9 @@ const App: React.FC = () => {
               initialSceneId={startSceneId}
               elevenLabsApiKey={elevenLabsApiKey}
               narratorVoiceId={narratorVoiceId}
+              narratorVoiceAssignments={narratorVoiceAssignments}
+              currentLanguage={currentLanguage}
+              translations={translations}
             />
           )}
           
@@ -2069,16 +2285,28 @@ const App: React.FC = () => {
             onSaveAssignments={setVoiceAssignments}
             currentElevenLabsApiKey={elevenLabsApiKey}
             onSetElevenLabsApiKey={setElevenLabsApiKey}
+            currentOpenaiApiKey={openaiApiKey}
+            onSetOpenaiApiKey={setOpenaiApiKey}
+            onGenerateImagePrompts={generateImagePrompts}
+            isGeneratingPrompts={isGeneratingPrompts}
+            characterAnalysisProgress={characterAnalysisProgress}
+            onGenerateAllSceneImages={generateAllSceneImages}
+            isBulkGeneratingImages={isBulkGeneratingImages}
+            bulkImageProgress={bulkImageProgress}
+            onDownloadAllAudio={handleDownloadAllAudio}
+            isDownloadingAudio={isDownloadingAudio}
             currentNarratorVoiceId={narratorVoiceId}
             onSetNarratorVoiceId={setNarratorVoiceId}
             currentNarratorVoiceAssignments={narratorVoiceAssignments}
             onSetNarratorVoiceAssignments={setNarratorVoiceAssignments}
             scenes={scenes}
-            onAddTranslation={handleAddTranslation}
+            connections={connections}
+            currentLanguage={currentLanguage}
+            translations={translations}
+            onSaveTranslations={setTranslations}
           />
         </div>
       </div>
-    </LanguageProvider>
   );
 };
 

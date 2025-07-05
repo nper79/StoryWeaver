@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { Scene, StoryData, Point, ConnectionDragStartData } from '../types';
+import type { Scene, StoryData, Point, ConnectionDragStartData, Translation } from '../types';
 import SceneBlock from './SceneBlock';
 import ConnectionArrow from './ConnectionArrow';
 import Modal from './Modal';
@@ -35,6 +35,8 @@ interface CanvasViewProps {
   onGenerateAllBeatImages?: (sceneId: string) => void; // Bulk beat image generation
   onUploadBeatVideo?: (sceneId: string, beatId: string, videoFile: File) => void; // Beat video upload
   generatingBeatImageFor: { sceneId: string; beatId: string } | null; // Beat image loading state
+  currentLanguage: string; // Current language for translations
+  translations: Translation[]; // Available translations
 }
 
 const CanvasView: React.FC<CanvasViewProps> = ({
@@ -66,6 +68,8 @@ const CanvasView: React.FC<CanvasViewProps> = ({
   onGenerateAllBeatImages, // Destructure new prop
   onUploadBeatVideo, // Destructure new prop
   generatingBeatImageFor, // Destructure new prop
+  currentLanguage, // Destructure translation props
+  translations, // Destructure translation props
 }) => {
   // Safety check to prevent undefined destructuring
   if (!storyData) {
@@ -338,6 +342,8 @@ const CanvasView: React.FC<CanvasViewProps> = ({
             onGenerateAllBeatImages={onGenerateAllBeatImages} // Pass new prop
             onUploadBeatVideo={onUploadBeatVideo} // Pass new prop
             generatingBeatImageFor={generatingBeatImageFor} // Pass new prop
+            currentLanguage={currentLanguage} // Pass translation props
+            translations={translations} // Pass translation props
           />
         ))}
       </div>

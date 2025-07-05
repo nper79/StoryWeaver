@@ -38,18 +38,17 @@ Guidelines for creating beats:
 7. Create vivid, specific image prompts that capture the essence of the entire beat segment
 8. CRITICAL: Every image prompt MUST include the phrase 'no speech bubbles' to ensure clean visual novel style images
 
-**SPEAKER ANNOTATION REQUIREMENT:**
-9. IMPORTANT: You MUST annotate who speaks each part of the text using [SpeakerName] tags
-10. Use [Narrator] for narrative text, action descriptions, and scene setting
-11. Use [CharacterName] for dialogue and character-specific actions
-12. Example format: "[Narrator]Lucy walks into the room. [Lucy]\"Hello everyone!\" [Narrator]she says with a smile."
-13. This ensures proper voice assignment for audio playback in any story with any characters
+**TEXT FORMATTING:**
+9. Keep the text natural and readable without speaker annotations
+10. Write dialogue and narrative text in a flowing, story-like format
+11. Example format: "Lucy walks into the room. 'Hello everyone!' she says with a smile."
+12. The system will automatically detect speakers for voice assignment during playback
 
 Return your response as a JSON object with this structure:
 {
   "beats": [
     {
-      "text": "The complete text content for this beat segment with [Speaker] annotations (can include multiple sentences, dialogue lines, and narration)",
+      "text": "The complete text content for this beat segment with natural formatting (can include multiple sentences, dialogue lines, and narration)",
       "imagePrompt": "Detailed visual description for image generation that captures the essence of this entire beat segment"
     }
   ]

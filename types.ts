@@ -46,12 +46,44 @@ export interface VoiceAssignment {
   imageId?: string; // Changed: Now stores image ID instead of data URL
 }
 
+// Multilingual support types
+export interface Translation {
+  id: string;
+  language: string; // Language code (e.g., 'en', 'es', 'pt')
+  sceneId: string;
+  title: string;
+  content: string;
+  beats?: {
+    id: string;
+    text: string;
+    imagePrompt?: string;
+  }[];
+  createdAt: string;
+  version: number;
+}
+
+// Translation for connection labels
+export interface ConnectionTranslation {
+  id: string;
+  language: string;
+  connectionId: string;
+  label: string;
+}
+
+export interface NarratorVoiceAssignments {
+  [language: string]: string; // language code -> voice ID
+}
+
 export interface StoryData {
   scenes: Scene[];
   connections: Connection[];
   startSceneId?: string | null; // Optional: ID of the first scene
   voiceAssignments?: VoiceAssignment[]; 
   narratorVoiceId?: string; // Voice ID for the narrator throughout the story
+  narratorVoiceAssignments?: NarratorVoiceAssignments; // Voice assignments per language
+  translations?: Translation[]; // Translations for all scenes
+  connectionTranslations?: ConnectionTranslation[]; // Translations for connection labels
+  currentLanguage?: string; // Current active language
 }
 
 export interface Point {

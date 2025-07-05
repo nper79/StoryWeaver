@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import type { StoryData } from '../types';
+import type { StoryData, Translation } from '../types';
 
 interface ToolbarProps {
   onAddScene: () => void;
@@ -17,8 +17,11 @@ interface ToolbarProps {
   onGenerateAllSceneImages: () => void;
   isBulkGeneratingImages: boolean;
   bulkImageProgress: number;
-  onMigrateBeats?: () => void; // New prop for beat migration
-  isMigratingBeats?: boolean; // New prop for migration loading state
+  onDownloadAllAudio?: () => void; // New prop for audio download
+  isDownloadingAudio?: boolean; // New prop for audio download loading state
+  currentLanguage: string; // Current selected language
+  translations: Translation[]; // Available translations
+  onLanguageChange: (language: string) => void; // Callback when language changes
 }
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
@@ -37,11 +40,47 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onGenerateAllSceneImages,
   isBulkGeneratingImages,
   bulkImageProgress,
-  onMigrateBeats,
-  isMigratingBeats,
+  onDownloadAllAudio,
+  isDownloadingAudio,
+  currentLanguage,
+  translations,
+  onLanguageChange,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+
+  // Get available languages from translations
+  const getAvailableLanguages = () => {
+    const languages = new Set(['en']); // Always include English
+    translations.forEach(translation => {
+      languages.add(translation.language);
+    });
+    return Array.from(languages);
+  };
+
+  const getLanguageName = (code: string) => {
+    const languageNames: Record<string, string> = {
+      'en': 'English',
+      'es': 'Español',
+      'pt': 'Português',
+      'fr': 'Français',
+      'de': 'Deutsch',
+      'it': 'Italiano',
+      'ja': '日本語',
+      'ko': '한국어',
+      'zh': '中文',
+      'ru': 'Русский'
+    };
+    return languageNames[code] || code.toUpperCase();
+  };
+
+  const availableLanguages = getAvailableLanguages();
+  
+  // Debug logs for language selector
+  console.log('🌐 Language Selector Debug:');
+  console.log('- Available languages:', availableLanguages);
+  console.log('- Current language:', currentLanguage);
+  console.log('- Translations count:', translations.length);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -113,6 +152,24 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </svg>
         <span>Play Story</span>
       </button>
+      {/* Language Selector - Always show for debugging */}
+      <div className="flex items-center space-x-2">
+        <span className="text-sm text-slate-300 whitespace-nowrap">Language:</span>
+        <select
+          value={currentLanguage}
+          onChange={(e) => onLanguageChange(e.target.value)}
+          className="px-3 py-2 rounded-md text-sm bg-slate-700 border border-slate-600 text-slate-100 focus:ring-2 focus:ring-sky-500 focus:border-sky-500 min-w-0"
+          title="Switch between available story languages"
+        >
+          {availableLanguages.map(lang => (
+            <option key={lang} value={lang}>
+              {getLanguageName(lang)} ({lang.toUpperCase()})
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-slate-400">({availableLanguages.length} langs)</span>
+      </div>
+      
       <button onClick={onAddScene} className={primaryButtonClass}>
         Add Scene
       </button>
@@ -168,32 +225,32 @@ const Toolbar: React.FC<ToolbarProps> = ({
       </div>
       
       {/* Beat Migration */}
-      {onMigrateBeats && (
+      {onDownloadAllAudio && (
         <div className="border-l border-slate-600 pl-3 flex items-center space-x-3">
           <button 
-            onClick={onMigrateBeats}
+            onClick={onDownloadAllAudio}
             className={`px-3 py-2 text-sm font-medium rounded-md transition-colors flex items-center space-x-2 ${
-              isMigratingBeats 
-                ? 'bg-yellow-400 text-yellow-900 cursor-not-allowed' 
-                : 'bg-yellow-600 hover:bg-yellow-500 text-white'
+              isDownloadingAudio 
+                ? 'bg-blue-400 text-blue-900 cursor-not-allowed' 
+                : 'bg-blue-600 hover:bg-blue-500 text-white'
             }`}
-            disabled={isMigratingBeats}
-            title="Migrate existing beats to use speaker annotations [Speaker] for better voice assignment"
+            disabled={isDownloadingAudio}
+            title="Download and cache all audio for all languages to avoid streaming delays"
           >
-            {isMigratingBeats ? (
+            {isDownloadingAudio ? (
               <>
                 <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <span>Migrating...</span>
+                <span>Downloading Audio...</span>
               </>
             ) : (
               <>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                  <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z" clipRule="evenodd" />
+                  <path fillRule="evenodd" d="M10 3a.75.75 0 01.75.75v10.638l3.96-4.158a.75.75 0 111.08 1.04l-5.25 5.5a.75.75 0 01-1.08 0l-5.25-5.5a.75.75 0 111.08-1.04l3.96 4.158V3.75A.75.75 0 0110 3z" clipRule="evenodd" />
                 </svg>
-                <span>Migrate Beats</span>
+                <span>Download All Audio</span>
               </>
             )}
           </button>

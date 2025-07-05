@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { StoryData, Scene, Connection, VoiceAssignment, Beat } from '../types'; 
+import type { StoryData, Scene, Connection, VoiceAssignment, Beat, Translation } from '../types'; 
 import { generateAudioWithAlignment } from '../elevenLabsService';
 import { getImageFromStorage } from '../fileStorageService';
 import WordHighlightText from './WordHighlightText';
@@ -11,6 +11,9 @@ interface PlayModalProps {
   initialSceneId: string;
   elevenLabsApiKey: string | null; 
   narratorVoiceId: string | null;
+  narratorVoiceAssignments: { [language: string]: string };
+  currentLanguage: string;
+  translations: Translation[];
 }
 
 interface ContentLine {
@@ -47,7 +50,10 @@ const PlayModal: React.FC<PlayModalProps> = ({
   story, 
   initialSceneId, 
   elevenLabsApiKey, 
-  narratorVoiceId
+  narratorVoiceId,
+  narratorVoiceAssignments,
+  currentLanguage,
+  translations
 }) => {
   console.log(`🎙️ [PLAYMODAL] Received narratorVoiceId: ${narratorVoiceId || 'null/undefined'}`);
   const [currentSceneId, setCurrentSceneId] = useState<string | null>(initialSceneId);
@@ -73,6 +79,45 @@ const PlayModal: React.FC<PlayModalProps> = ({
   const currentlyProcessingLine = useRef<string | null>(null);
   const isProcessingBeat = useRef<boolean>(false); 
   const currentAudioBlobUrlRef = useRef<string | null>(null); 
+
+  // Function to get translated scene content
+  const getTranslatedScene = (scene: Scene) => {
+    console.log(`🌍 [TRANSLATION] Getting translated scene for language: ${currentLanguage}`);
+    console.log(`🌍 [TRANSLATION] Scene ID: ${scene.id}`);
+    console.log(`🌍 [TRANSLATION] Available translations:`, translations.length);
+    
+    if (currentLanguage === 'en') {
+      console.log(`🌍 [TRANSLATION] Using original English scene`);
+      return scene; // Return original scene for English
+    }
+    
+    // Find translation for current scene and language
+    const translation = translations.find(t => 
+      t.sceneId === scene.id && t.language === currentLanguage
+    );
+    
+    console.log(`🌍 [TRANSLATION] Found translation:`, !!translation);
+    if (translation) {
+      console.log(`🌍 [TRANSLATION] Translation has beats:`, !!translation.beats, translation.beats?.length || 0);
+      const translatedScene = {
+        ...scene,
+        title: translation.title,
+        content: translation.content,
+        beats: translation.beats?.map((beat, index) => ({
+          ...beat,
+          order: index // Ensure order is set for translated beats
+        })) || scene.beats
+      };
+      console.log(`🌍 [TRANSLATION] Translated scene beats:`, translatedScene.beats?.length || 0);
+      if (translatedScene.beats && translatedScene.beats.length > 0) {
+        console.log(`🌍 [TRANSLATION] First beat text:`, translatedScene.beats[0].text.substring(0, 50) + '...');
+      }
+      return translatedScene;
+    }
+    
+    console.log(`🌍 [TRANSLATION] No translation found, using original scene`);
+    return scene; // Fallback to original if no translation found
+  };
 
   const cleanupAudio = useCallback(() => {
     if (audioRef.current) {
@@ -270,13 +315,14 @@ const PlayModal: React.FC<PlayModalProps> = ({
     }
     
     const scene = story.scenes.find(s => s.id === currentSceneId);
-    setCurrentScene(scene || null);
+    const translatedScene = scene ? getTranslatedScene(scene) : null;
+    setCurrentScene(translatedScene);
     
-    if (scene) {
+    if (translatedScene) {
 
       // Handle subdivided scenes (beats)
-      if (scene.isSubdivided && scene.beats && scene.beats.length > 0) {
-        const sortedBeats = [...scene.beats].sort((a, b) => a.order - b.order);
+      if (translatedScene.isSubdivided && translatedScene.beats && translatedScene.beats.length > 0) {
+        const sortedBeats = [...translatedScene.beats].sort((a, b) => a.order - b.order);
         setCurrentBeats(sortedBeats);
         setCurrentBeatIndex(0);
         
@@ -288,7 +334,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
       } 
       // Handle regular, line-by-line scenes
       else {
-        const lines = scene.content.split('\n');
+        const lines = translatedScene.content.split('\n');
         const newParsedLines: ContentLine[] = lines.map((line, index) => {
           const match = line.match(/^([\w\s.-]+):\s*(.*)$/);
           let speaker, text, isSpokenLine = false, voiceId: string | undefined;
@@ -301,16 +347,25 @@ const PlayModal: React.FC<PlayModalProps> = ({
           } else { // Narration line
             speaker = 'Narrator';
             text = line.trim();
-            // Use the global narrator voice ID
-            voiceId = narratorVoiceId || undefined;
-            console.log(`🎙️ [NARRATOR] Using narrator voice: ${narratorVoiceId || 'none'} for text: ${text.substring(0, 30)}...`);
+            // Use language-specific narrator voice or fallback to global narrator voice
+            voiceId = narratorVoiceAssignments[currentLanguage] || narratorVoiceId || undefined;
+            console.log(`🎙️ [NARRATOR] Using narrator voice for ${currentLanguage}: ${voiceId || 'none'} for text: ${text.substring(0, 30)}...`);
           }
 
-          // Intelligent fallback: use narratorVoiceId if available, then Rachel as last resort
+          // Intelligent fallback: use language-specific narrator voice, then global narrator voice, then Rachel as last resort
           if (!voiceId && text) {
-            if (speaker === 'Narrator' && narratorVoiceId) {
-              voiceId = narratorVoiceId;
-              console.log(`[PlayModal] Using selected narrator voice: ${narratorVoiceId}`);
+            if (speaker === 'Narrator') {
+              const languageSpecificVoice = narratorVoiceAssignments[currentLanguage];
+              if (languageSpecificVoice) {
+                voiceId = languageSpecificVoice;
+                console.log(`[PlayModal] Using language-specific narrator voice for ${currentLanguage}: ${languageSpecificVoice}`);
+              } else if (narratorVoiceId) {
+                voiceId = narratorVoiceId;
+                console.log(`[PlayModal] Using global narrator voice: ${narratorVoiceId}`);
+              } else {
+                voiceId = '21m00Tcm4TlvDq8ikWAM'; // Rachel - Last resort fallback
+                console.log(`[PlayModal] No narrator voice found for '${speaker}' in ${currentLanguage}. Using fallback voice.`);
+              }
             } else {
               voiceId = '21m00Tcm4TlvDq8ikWAM'; // Rachel - Last resort fallback
               console.log(`[PlayModal] No voice found for '${speaker}'. Using fallback voice.`);
@@ -320,7 +375,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
           // A line is spoken if it has text and a voice assigned.
           isSpokenLine = !!(voiceId && text);
 
-          return { id: `line-${scene.id}-${index}`, text, speaker, originalLine: line, isSpokenLine, voiceId };
+          return { id: `line-${translatedScene.id}-${index}`, text, speaker, originalLine: line, isSpokenLine, voiceId };
         });
         setParsedLines(newParsedLines);
         setCurrentBeats([]);
@@ -336,7 +391,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
       setChoices([]);
       setShowChoices(currentSceneId ? true : false); 
     }
-    const outgoingConnections = scene ? story.connections.filter(c => c.fromSceneId === scene.id) : [];
+    const outgoingConnections = translatedScene ? story.connections.filter(c => c.fromSceneId === translatedScene.id) : [];
     setChoices(outgoingConnections);
 
   }, [currentSceneId, story.scenes, story.connections, isOpen]);
@@ -444,8 +499,9 @@ const PlayModal: React.FC<PlayModalProps> = ({
       if (profile?.voiceId) {
         voiceId = profile.voiceId;
       } else if (part.speaker === 'Narrator') {
-        // Use the global narrator voice ID
-        voiceId = narratorVoiceId || undefined;
+        // Use language-specific narrator voice or fallback to global narrator voice
+        voiceId = narratorVoiceAssignments[currentLanguage] || narratorVoiceId || undefined;
+        console.log(`🎙️ [BEAT NARRATOR] Using narrator voice for ${currentLanguage}: ${voiceId || 'none'}`);
         console.log(`🎙️ [NARRATOR BEAT] Using narrator voice: ${narratorVoiceId || 'none'} for text: ${part.text.substring(0, 30)}...`);
       }
 
@@ -486,7 +542,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
     console.log('🔄 [RESET] First line preview:', beatLines[0]?.text?.substring(0, 50) + '...');
     setCurrentLineIndex(0); // Reset to first part of this beat
     
-  }, [isOpen, currentScene, currentBeats, currentBeatIndex]);
+  }, [isOpen, currentScene, currentBeats, currentBeatIndex, narratorVoiceAssignments, currentLanguage]);
 
   useEffect(() => {
     let isActive = true; 
@@ -651,15 +707,17 @@ const PlayModal: React.FC<PlayModalProps> = ({
     const lineId = `${currentBeatIndex}-${lineIndex}-${line?.text?.substring(0, 20)}`;
     
     if (line?.isSpokenLine && line.voiceId && line.text && lineIndex === currentLineIndex) {
-      // Validate that we're using the correct line data (not stale from previous beat)
-      const expectedBeatText = currentBeats[currentBeatIndex]?.text;
-      const isCorrectBeat = expectedBeatText && line.text.includes(expectedBeatText.substring(0, 20));
-      
-      if (!isCorrectBeat) {
-        console.log('⚠️ [STALE DATA] Line data doesn\'t match current beat, skipping:');
-        console.log('  Expected beat text:', expectedBeatText?.substring(0, 50) + '...');
-        console.log('  Actual line text:', line.text?.substring(0, 50) + '...');
-        return () => { isActive = false; if (timeoutId) window.clearTimeout(timeoutId); };
+      // Only validate beat data if we're actually in beat mode
+      if (inBeatMode) {
+        const expectedBeatText = currentBeats[currentBeatIndex]?.text;
+        const isCorrectBeat = expectedBeatText && line.text.includes(expectedBeatText.substring(0, 20));
+        
+        if (!isCorrectBeat) {
+          console.log('⚠️ [STALE DATA] Line data doesn\'t match current beat, skipping:');
+          console.log('  Expected beat text:', expectedBeatText?.substring(0, 50) + '...');
+          console.log('  Actual line text:', line.text?.substring(0, 50) + '...');
+          return () => { isActive = false; if (timeoutId) window.clearTimeout(timeoutId); };
+        }
       }
       
       if (currentlyProcessingLine.current === lineId) {

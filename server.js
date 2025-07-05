@@ -100,9 +100,33 @@ app.post('/api/images/edit', upload.single('image'), async (req, res) => {
   }
 });
 
+// Translation endpoint
+app.post('/api/openai/translate', async (req, res) => {
+  try {
+    const { prompt, apiKey } = req.body;
+    
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 500,
+      temperature: 0.3
+    });
+    
+    const translation = response.choices[0]?.message?.content || '';
+    res.json({ translation });
+  } catch (error) {
+    console.error('[Server] Translation error:', error);
+    res.status(500).json({ error: 'Translation failed' });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    openaiConfigured: !!process.env.VITE_OPENAI_API_KEY
+  });
 });
 
 app.listen(port, () => {

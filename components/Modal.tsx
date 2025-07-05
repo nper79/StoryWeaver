@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 interface ModalProps {
@@ -6,9 +5,10 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  wide?: boolean; // Optional prop for wider modals
 }
 
-const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
+const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, wide = false }) => {
   if (!isOpen) return null;
 
   return (
@@ -17,7 +17,7 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
       onClick={onClose} // Close on backdrop click
     >
       <div 
-        className="bg-slate-800 p-6 rounded-lg shadow-2xl w-full max-w-md transform transition-all duration-300 ease-in-out scale-95 opacity-0 animate-modal-appear"
+        className={`bg-slate-800 p-6 rounded-lg shadow-2xl w-full ${wide ? 'max-w-7xl' : 'max-w-md'} transform transition-all duration-300 ease-in-out scale-95 opacity-0 animate-modal-appear`}
         onClick={(e) => e.stopPropagation()} // Prevent close when clicking inside modal content
       >
         <div className="flex justify-between items-center mb-4">

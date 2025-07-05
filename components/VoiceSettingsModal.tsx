@@ -1,28 +1,37 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Modal from './Modal';
-import type { VoiceAssignment, ElevenLabsVoice } from '../types';
+import type { VoiceAssignment, ElevenLabsVoice, NarratorVoiceAssignments, Scene, Translation, Connection } from '../types';
 import { fetchAvailableElevenLabsVoices } from '../elevenLabsService';
 import { saveCharacterImage, getImageFromStorage } from '../fileStorageService';
+import LanguageSelector from './LanguageSelector';
+import { TranslationService } from '../services/translationService';
 
 interface SettingsModalProps { 
   isOpen: boolean;
   onClose: () => void;
   currentAssignments: VoiceAssignment[];
   onSaveAssignments: (assignments: VoiceAssignment[]) => void;
-  currentElevenLabsApiKey: string | null; // Renamed from currentApiKey
-  onSetElevenLabsApiKey: (apiKey: string | null) => void; // Renamed from onSetApiKey
-  currentOpenaiApiKey: string | null; // New prop for OpenAI API key
-  onSetOpenaiApiKey: (apiKey: string | null) => void; // New prop for OpenAI API key
+  currentElevenLabsApiKey: string | null;
+  onSetElevenLabsApiKey: (apiKey: string | null) => void;
+  currentOpenaiApiKey: string | null;
+  onSetOpenaiApiKey: (apiKey: string | null) => void;
   onGenerateImagePrompts: () => Promise<void>; 
   isGeneratingPrompts: boolean; 
-  characterAnalysisProgress?: number; // Progress percentage for character analysis
+  characterAnalysisProgress?: number;
   onGenerateAllSceneImages: () => Promise<void>;
   isBulkGeneratingImages: boolean;
   bulkImageProgress: number;
-  onMigrateBeats?: () => void; // Optional prop for beat migration
-  isMigratingBeats?: boolean; // Optional prop for migration loading state
-  currentNarratorVoiceId?: string; // Current narrator voice ID
-  onSetNarratorVoiceId: (voiceId: string) => void; // Callback to set narrator voice
+  onDownloadAllAudio?: () => void;
+  isDownloadingAudio?: boolean;
+  currentNarratorVoiceId?: string | undefined;
+  onSetNarratorVoiceId: (voiceId: string | undefined) => void;
+  currentNarratorVoiceAssignments?: NarratorVoiceAssignments;
+  onSetNarratorVoiceAssignments: (assignments: NarratorVoiceAssignments) => void;
+  scenes: Scene[];
+  connections: Connection[];
+  currentLanguage: string;
+  translations: Translation[];
+  onSaveTranslations: (translations: Translation[]) => void;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
@@ -30,32 +39,46 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   currentAssignments,
   onSaveAssignments,
-  currentElevenLabsApiKey, // Renamed
-  onSetElevenLabsApiKey, // Renamed
-  currentOpenaiApiKey, // New prop for OpenAI API key
-  onSetOpenaiApiKey, // New prop for OpenAI API key
+  currentElevenLabsApiKey, 
+  onSetElevenLabsApiKey, 
+  currentOpenaiApiKey, 
+  onSetOpenaiApiKey, 
   onGenerateImagePrompts,
   isGeneratingPrompts,
   characterAnalysisProgress,
   onGenerateAllSceneImages,
   isBulkGeneratingImages,
   bulkImageProgress,
-  onMigrateBeats,
-  isMigratingBeats,
+  onDownloadAllAudio,
+  isDownloadingAudio,
   currentNarratorVoiceId,
   onSetNarratorVoiceId,
+  currentNarratorVoiceAssignments,
+  onSetNarratorVoiceAssignments,
+  scenes,
+  connections,
+  currentLanguage,
+  translations,
+  onSaveTranslations,
 }) => {
   const [assignments, setAssignments] = useState<VoiceAssignment[]>([]);
   const [availableVoices, setAvailableVoices] = useState<ElevenLabsVoice[]>([]);
   const [isLoadingVoices, setIsLoadingVoices] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newCharacterName, setNewCharacterName] = useState('');
-  const [elevenLabsApiKeyInput, setElevenLabsApiKeyInput] = useState<string>(''); // Renamed
-  const [openaiApiKeyInput, setOpenaiApiKeyInput] = useState<string>(''); // New state for OpenAI API key
+  const [elevenLabsApiKeyInput, setElevenLabsApiKeyInput] = useState<string>(''); 
+  const [openaiApiKeyInput, setOpenaiApiKeyInput] = useState<string>(''); 
   const [characterUrlInputs, setCharacterUrlInputs] = useState<Record<number, string>>({});
   // New state for storing loaded image data URLs for display
   const [characterImageUrls, setCharacterImageUrls] = useState<Record<number, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<number, boolean>>({});
+  // Multilingual voice settings state
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
+  const [narratorVoiceAssignments, setNarratorVoiceAssignments] = useState<NarratorVoiceAssignments>({});
+  // Translation state
+  const [selectedTranslationLanguages, setSelectedTranslationLanguages] = useState<string[]>([]);
+  const [isTranslating, setIsTranslating] = useState<boolean>(false);
+  const [translationProgress, setTranslationProgress] = useState<any>(null);
 
 
   useEffect(() => {
@@ -64,6 +87,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       setAssignments(initialAssignments);
       setElevenLabsApiKeyInput(currentElevenLabsApiKey || ''); // Updated
       setOpenaiApiKeyInput(currentOpenaiApiKey || ''); // New state for OpenAI API key
+      
+      // Initialize multilingual narrator voice assignments
+      setNarratorVoiceAssignments(currentNarratorVoiceAssignments || {});
       
       // Initialize empty URL inputs
       const initialUrlInputs: Record<number, string> = {};
@@ -205,6 +231,106 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleVoiceChange = (index: number, voiceId: string) => {
     const updated = assignments.map((a, i) => i === index ? { ...a, voiceId: voiceId } : a);
     setAssignments(updated);
+  };
+
+  // Multilingual narrator voice functions
+  const handleNarratorVoiceChange = (language: string, voiceId: string) => {
+    const updated = { ...narratorVoiceAssignments, [language]: voiceId };
+    setNarratorVoiceAssignments(updated);
+  };
+
+  const getCurrentNarratorVoice = (language: string): string => {
+    return narratorVoiceAssignments[language] || currentNarratorVoiceId || '';
+  };
+
+  const getAvailableLanguages = (): string[] => {
+    const supportedLanguages = TranslationService.getSupportedLanguages();
+    return Object.keys(supportedLanguages);
+  };
+
+  // Translation functions
+  const handleTranslateStory = async () => {
+    if (!currentOpenaiApiKey) {
+      alert('OpenAI API key is required for automatic translation');
+      return;
+    }
+
+    if (selectedTranslationLanguages.length === 0) {
+      alert('Please select at least one target language');
+      return;
+    }
+
+    if (!scenes || scenes.length === 0) {
+      alert('No scenes found to translate');
+      return;
+    }
+
+    const confirmTranslation = window.confirm(
+      `This will translate ${scenes.length} scenes into ${selectedTranslationLanguages.length} languages. ` +
+      `This may take several minutes and will use your OpenAI API credits. Continue?`
+    );
+
+    if (!confirmTranslation) {
+      return;
+    }
+    
+    setIsTranslating(true);
+    setTranslationProgress(null);
+    
+    try {
+      console.log('🔍 Debug - Translation input:');
+      console.log('- Scenes count:', scenes?.length || 0);
+      console.log('- Connections count:', connections?.length || 0);
+      console.log('- Target languages:', selectedTranslationLanguages);
+      console.log('- API key present:', !!currentOpenaiApiKey);
+      console.log('- Scenes data:', scenes);
+      
+      const batchRequest = {
+        scenes: scenes,
+        connections: connections || [], // Add connections from props
+        targetLanguages: selectedTranslationLanguages,
+        apiKey: currentOpenaiApiKey
+      };
+      
+      const result = await TranslationService.batchTranslateStory(
+        batchRequest,
+        (progress) => {
+          console.log('🔄 Translation progress:', progress);
+          setTranslationProgress(progress);
+        }
+      );
+      
+      console.log('✅ Translation result:', result);
+      
+      // Merge new translations with existing ones
+      const updatedTranslations = [...translations];
+      result.translations.forEach(newTranslation => {
+        // Remove any existing translation for the same scene and language
+        const existingIndex = updatedTranslations.findIndex(
+          t => t.sceneId === newTranslation.sceneId && t.language === newTranslation.language
+        );
+        if (existingIndex >= 0) {
+          updatedTranslations[existingIndex] = newTranslation;
+        } else {
+          updatedTranslations.push(newTranslation);
+        }
+      });
+      
+      // Save translations using the callback
+      onSaveTranslations(updatedTranslations);
+      
+      // TODO: Save connection translations - need to add this to App.tsx state
+      console.log('Connection translations:', result.connectionTranslations);
+      
+      alert(`Translation completed! ${result.translations.length} scene translations and ${result.connectionTranslations.length} connection translations created/updated.`);
+      
+    } catch (error) {
+      console.error('Translation error:', error);
+      alert('Translation failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsTranslating(false);
+      setTranslationProgress(null);
+    }
   };
 
   const handleDeleteCharacter = (index: number) => {
@@ -427,8 +553,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       voiceId: a.voiceId
     })));
     
+    console.log(`[VoiceSettings] ✅ Saving multilingual narrator voices:`, narratorVoiceAssignments);
+    
     // Save assignments
     onSaveAssignments(validAssignments);
+    
+    // Save multilingual narrator voice assignments
+    if (onSetNarratorVoiceAssignments) {
+      onSetNarratorVoiceAssignments(narratorVoiceAssignments);
+    }
     
     // Note: API keys are set immediately via their respective "Set Key" buttons.
     onClose();
@@ -532,8 +665,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   )};
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Settings"> 
-      <div className="space-y-4 text-sm">
+    <Modal isOpen={isOpen} onClose={onClose} title="Settings" wide={true}> 
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 text-sm max-h-[80vh] overflow-y-auto">
         {/* Section for ElevenLabs API Key and Character/Voice Settings */}
         <details className="bg-slate-750 p-3 rounded-md group" open>
             <summary className="text-md font-semibold text-sky-300 cursor-pointer group-hover:text-sky-200 list-none flex justify-between items-center">
@@ -680,6 +813,163 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
         </details>
 
+        {/* Section for Story Translation */}
+        <details className="bg-slate-750 p-3 rounded-md group">
+            <summary className="text-md font-semibold text-orange-300 cursor-pointer group-hover:text-orange-200 list-none flex justify-between items-center">
+                <span>Story Translation</span>
+                <span className="text-xs text-slate-400 group-open:rotate-90 transform transition-transform duration-200">&#9656;</span>
+            </summary>
+            <div className="mt-3 space-y-3">
+                <p className="text-xs text-slate-400">
+                    Translate your entire story into multiple languages automatically using AI. This will create translated versions of all scenes while preserving speaker tags and narrative structure.
+                </p>
+                
+                <div className="p-3 bg-slate-700 rounded-md space-y-3">
+                    <label className="block text-sm font-medium text-orange-300">
+                        Select Target Languages
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                        {Object.entries(TranslationService.getSupportedLanguages())
+                            .filter(([code]) => code !== 'en') // Exclude English as it's the source
+                            .map(([code, name]) => (
+                            <label key={code} className="flex items-center space-x-2 text-xs">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedTranslationLanguages.includes(code)}
+                                    onChange={(e) => {
+                                        if (e.target.checked) {
+                                            setSelectedTranslationLanguages(prev => [...prev, code]);
+                                        } else {
+                                            setSelectedTranslationLanguages(prev => prev.filter(lang => lang !== code));
+                                        }
+                                    }}
+                                    className="rounded border-slate-500 bg-slate-600 text-orange-500 focus:ring-orange-500"
+                                    disabled={isTranslating}
+                                />
+                                <span className="text-slate-300">{name}</span>
+                            </label>
+                        ))}
+                    </div>
+                </div>
+                
+                <button
+                    onClick={handleTranslateStory}
+                    className="w-full px-4 py-2 rounded bg-orange-600 hover:bg-orange-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isTranslating || selectedTranslationLanguages.length === 0 || !currentOpenaiApiKey}
+                >
+                    {isTranslating ? (
+                        <span className="flex items-center justify-center">
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Translating Story...
+                        </span>
+                    ) : (
+                        `Translate Story to ${selectedTranslationLanguages.length} Language${selectedTranslationLanguages.length !== 1 ? 's' : ''}`
+                    )}
+                </button>
+                
+                {translationProgress && (
+                    <div className="p-2 bg-slate-700 rounded text-xs">
+                        <p className="text-orange-400 font-medium">
+                            Progress: Scene {translationProgress.currentScene}/{translationProgress.totalScenes}
+                        </p>
+                        <p className="text-slate-300">
+                            Current: {translationProgress.currentLanguage}
+                        </p>
+                        <p className="text-green-400">
+                            Completed: {translationProgress.completed.length} translations
+                        </p>
+                        {translationProgress.errors.length > 0 && (
+                            <p className="text-red-400">
+                                Errors: {translationProgress.errors.length}
+                            </p>
+                        )}
+                    </div>
+                )}
+                
+                {!currentOpenaiApiKey && (
+                    <p className="text-xs text-yellow-400">
+                        ⚠️ OpenAI API key required for automatic translation
+                    </p>
+                )}
+            </div>
+        </details>
+
+        {/* Section for Multilingual Narrator Voices */}
+        <details className="bg-slate-750 p-3 rounded-md group">
+            <summary className="text-md font-semibold text-green-300 cursor-pointer group-hover:text-green-200 list-none flex justify-between items-center">
+                <span>Multilingual Narrator Voices</span>
+                <span className="text-xs text-slate-400 group-open:rotate-90 transform transition-transform duration-200">&#9656;</span>
+            </summary>
+            <div className="mt-3 space-y-3">
+                <p className="text-xs text-slate-400">
+                    Configure different narrator voices for each language. This allows you to have language-appropriate voices when exporting stories in multiple languages.
+                </p>
+                
+                <LanguageSelector
+                    currentLanguage={selectedLanguage}
+                    onLanguageChange={setSelectedLanguage}
+                    availableLanguages={getAvailableLanguages()}
+                    className="mb-3"
+                />
+                
+                <div className="p-3 bg-slate-700 rounded-md space-y-2">
+                    <label className="block text-sm font-medium text-green-300">
+                        Narrator Voice for {TranslationService.getSupportedLanguages()[selectedLanguage] || selectedLanguage.toUpperCase()}
+                    </label>
+                    <select
+                        value={getCurrentNarratorVoice(selectedLanguage)}
+                        onChange={(e) => handleNarratorVoiceChange(selectedLanguage, e.target.value)}
+                        className="w-full p-2 border border-slate-500 rounded bg-slate-600 text-slate-100 focus:ring-green-500 focus:border-green-500"
+                        disabled={!currentElevenLabsApiKey || availableVoices.length === 0 || isLoadingVoices}
+                    >
+                        <option value="">
+                            {!currentElevenLabsApiKey ? "Set API Key First" :
+                            isLoadingVoices ? "Loading voices..." :
+                            (availableVoices.length === 0 && error ? "No voices (Error)" :
+                            (availableVoices.length === 0 ? "No voices available" : "Select Narrator Voice"))}
+                        </option>
+                        {availableVoices.map(voice => (
+                        <option key={voice.voice_id} value={voice.voice_id}>
+                            {voice.name} ({voice.labels?.accent ? `${voice.labels.accent}, ` : ''}{voice.category || 'standard'})
+                        </option>
+                        ))}
+                    </select>
+                    
+                    {getCurrentNarratorVoice(selectedLanguage) && (
+                        <p className="text-xs text-green-400">
+                            ✓ Voice configured for {TranslationService.getSupportedLanguages()[selectedLanguage]}
+                        </p>
+                    )}
+                </div>
+                
+                <div className="p-2 bg-slate-700 rounded text-xs">
+                    <p className="text-slate-300 font-medium mb-1">Configured Languages:</p>
+                    {Object.keys(narratorVoiceAssignments).length > 0 ? (
+                        <div className="space-y-1">
+                            {Object.entries(narratorVoiceAssignments).map(([lang, voiceId]) => {
+                                const voice = availableVoices.find(v => v.voice_id === voiceId);
+                                return (
+                                    <div key={lang} className="flex justify-between items-center">
+                                        <span className="text-slate-400">
+                                            {TranslationService.getSupportedLanguages()[lang] || lang.toUpperCase()}
+                                        </span>
+                                        <span className="text-green-400">
+                                            {voice ? voice.name : voiceId}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <p className="text-slate-400 italic">No multilingual voices configured yet</p>
+                    )}
+                </div>
+            </div>
+        </details>
+
         {/* Section for Image Prompt Generation */}
         <details className="bg-slate-750 p-3 rounded-md group" open>
             <summary className="text-md font-semibold text-purple-300 cursor-pointer group-hover:text-purple-200 list-none flex justify-between items-center">
@@ -737,32 +1027,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
         </details>
 
-        {/* Section for Beat Migration */}
+        {/* Section for Audio Download */}
         <details className="bg-slate-750 p-3 rounded-md group">
-            <summary className="text-md font-semibold text-yellow-300 cursor-pointer group-hover:text-yellow-200 list-none flex justify-between items-center">
-                <span>Beat Migration (Speaker Annotations)</span>
+            <summary className="text-md font-semibold text-blue-300 cursor-pointer group-hover:text-blue-200 list-none flex justify-between items-center">
+                <span>Audio Download (All Languages)</span>
                 <span className="text-xs text-slate-400 group-open:rotate-90 transform transition-transform duration-200">&#9656;</span>
             </summary>
             <div className="mt-3 space-y-3">
                 <p className="text-xs text-slate-400">
-                    Migrate existing beats to use speaker annotations [Speaker] for better voice assignment. 
-                    This will automatically analyze your beats and add speaker tags like [Narrator] and [CharacterName].
+                    Download and cache all audio for all beats in all available languages to avoid streaming delays during playback.
                 </p>
                 <button
-                    onClick={onMigrateBeats || (() => {})}
-                    className="w-full px-4 py-2 rounded bg-yellow-600 hover:bg-yellow-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={isMigratingBeats || !onMigrateBeats}
+                    onClick={onDownloadAllAudio}
+                    className="w-full px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isDownloadingAudio || !onDownloadAllAudio}
                 >
-                    {isMigratingBeats ? (
+                    {isDownloadingAudio ? (
                         <span className="flex items-center justify-center">
                             <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Migrating Beats...
+                            Downloading Audio...
                         </span>
                     ) : (
-                        "Migrate All Beats to New Format"
+                        "Download All Audio"
                     )}
                 </button>
                 <p className="text-xs text-slate-400">
@@ -772,21 +1061,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
         </details>
 
-        <div className="flex justify-end space-x-3 pt-4 border-t border-slate-600 mt-4">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded bg-slate-600 hover:bg-slate-500 text-slate-100 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSaveSettings} 
-            className="px-4 py-2 rounded bg-sky-500 hover:bg-sky-600 text-white transition-colors"
-            disabled={(isLoadingVoices && !!currentElevenLabsApiKey) || isGeneratingPrompts || isBulkGeneratingImages} 
-          >
-            Save & Close Settings
-          </button>
-        </div>
+      </div>
+      
+      {/* Action buttons outside the grid */}
+      <div className="flex justify-end space-x-3 pt-4 border-t border-slate-600 mt-4">
+        <button
+          onClick={onClose}
+          className="px-4 py-2 rounded bg-slate-600 hover:bg-slate-500 text-slate-100 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSaveSettings} 
+          className="px-4 py-2 rounded bg-sky-500 hover:bg-sky-600 text-white transition-colors"
+          disabled={(isLoadingVoices && !!currentElevenLabsApiKey) || isGeneratingPrompts || isBulkGeneratingImages} 
+        >
+          Save & Close Settings
+        </button>
       </div>
       <style>{`
         select:disabled, input:disabled, button:disabled {

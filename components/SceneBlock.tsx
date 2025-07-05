@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { Scene, Connection } from '../types';
+import type { Scene, Connection, Translation } from '../types';
 import EditableText from './EditableText';
 import BeatDisplay from './BeatDisplay';
 import { DEFAULT_SCENE_MIN_HEIGHT, DEFAULT_SCENE_WIDTH } from '../constants';
@@ -37,6 +37,8 @@ interface SceneBlockProps {
   onGenerateAllBeatImages?: (sceneId: string) => void; // New prop for bulk beat image generation
   onUploadBeatVideo?: (sceneId: string, beatId: string, videoFile: File) => void; // New prop for beat video upload
   generatingBeatImageFor: { sceneId: string; beatId: string } | null; // New prop for beat image loading state
+  currentLanguage: string; // Current language for translations
+  translations: Translation[]; // Available translations
 }
 
 const SceneBlock: React.FC<SceneBlockProps> = ({
@@ -70,6 +72,8 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
   onGenerateAllBeatImages, // New prop for bulk beat image generation
   onUploadBeatVideo, // New prop for beat video upload
   generatingBeatImageFor, // New prop for beat image loading state
+  currentLanguage, // Current language for translations
+  translations, // Available translations
 }) => {
   const [isAddingNewChoice, setIsAddingNewChoice] = useState(false);
   const [newChoiceInputText, setNewChoiceInputText] = useState('');
@@ -83,6 +87,34 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
   const [newCharacterName, setNewCharacterName] = useState('');
   const [showRewriteDropdown, setShowRewriteDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Function to get translated text for current scene
+  const getTranslatedScene = () => {
+    if (currentLanguage === 'en') {
+      return scene; // Return original scene for English
+    }
+    
+    // Find translation for current scene and language
+    const translation = translations.find(t => 
+      t.sceneId === scene.id && t.language === currentLanguage
+    );
+    
+    if (translation) {
+      return {
+        ...scene,
+        title: translation.title,
+        content: translation.content,
+        beats: translation.beats?.map((beat, index) => ({
+          ...beat,
+          order: index // Preserve correct order for translated beats
+        })) || scene.beats
+      };
+    }
+    
+    return scene; // Fallback to original if no translation found
+  };
+
+  const displayScene = getTranslatedScene();
 
   useEffect(() => {
     const loadStoredImage = async () => {
@@ -208,7 +240,7 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
       )}
       <div className="p-2 bg-slate-800 rounded-t-md relative flex justify-between items-center">
         <EditableText
-          initialValue={scene.title}
+          initialValue={displayScene.title}
           onSave={handleTitleSave}
           placeholder="Scene Title"
           className="text-sky-300 font-semibold flex-grow"
@@ -225,10 +257,10 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
         </button>
       </div>
       <div className="p-3 flex-grow">
-        {scene.isSubdivided && scene.beats ? (
+        {displayScene.beats && displayScene.beats.length > 0 ? (
           <div className="beats-container">
             <div className="mb-3 flex items-center justify-between">
-              <h4 className="text-sm font-medium text-slate-300">Story Beats</h4>
+              <h4 className="text-sm font-medium text-slate-300">Story Beats ({displayScene.beats.length})</h4>
               <div className="flex space-x-2">
                 {onGenerateAllBeatImages && (
                   <button
@@ -275,28 +307,31 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
                 </button>
               </div>
             </div>
-            {scene.beats.map((beat, index) => (
-              <BeatDisplay
-                key={beat.id}
-                beat={beat}
-                isLast={index === scene.beats!.length - 1}
-                onImageGenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
-                onImageRegenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
-                onVideoUpload={onUploadBeatVideo ? (beatId, videoFile) => onUploadBeatVideo(scene.id, beatId, videoFile) : undefined}
-                onBeatUpdate={(beatId, updates) => {
-                  // Update the specific beat within the scene
-                  const updatedBeats = scene.beats!.map(b => 
-                    b.id === beatId ? { ...b, ...updates } : b
-                  );
-                  onUpdate(scene.id, { beats: updatedBeats });
-                }}
-                generatingImage={generatingBeatImageFor?.sceneId === scene.id && generatingBeatImageFor?.beatId === beat.id}
-              />
-            ))}
+            {displayScene.beats
+              .sort((a, b) => a.order - b.order)
+              .map((beat, index) => (
+                <BeatDisplay
+                  key={beat.id}
+                  beat={beat}
+                  isLast={index === displayScene.beats!.length - 1}
+                  onImageGenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
+                  onImageRegenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
+                  onVideoUpload={onUploadBeatVideo ? (beatId, videoFile) => onUploadBeatVideo(scene.id, beatId, videoFile) : undefined}
+                  onBeatUpdate={(beatId, updates) => {
+                    // Update the specific beat within the scene
+                    const updatedBeats = scene.beats!.map(b => 
+                      b.id === beatId ? { ...b, ...updates } : b
+                    );
+                    onUpdate(scene.id, { beats: updatedBeats });
+                  }}
+                  generatingImage={generatingBeatImageFor?.sceneId === scene.id && generatingBeatImageFor?.beatId === beat.id}
+                />
+              ))
+            }
           </div>
         ) : (
           <EditableText
-            initialValue={scene.content}
+            initialValue={displayScene.content}
             onSave={handleContentSave}
             placeholder="Scene content..."
             isTextarea
@@ -402,6 +437,7 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
           </div>
         </div>
       )}
+
       
       {scene.generatedImagePrompt && (
         <div className="generated-prompt-display p-2 border-t border-slate-600 bg-slate-750">

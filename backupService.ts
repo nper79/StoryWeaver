@@ -8,6 +8,7 @@ export interface StoryBackup {
     exportDate: string;
     version: string;
     appName: string;
+    language?: string;
   };
 }
 
@@ -32,8 +33,52 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
       }
     };
 
-    // Add the story data as JSON
+    // Add the main story data (English) as JSON
     zip.file('story.json', JSON.stringify(backupData, null, 2));
+    
+    // Create language-specific folders if translations exist
+    if (storyData.translations && storyData.translations.length > 0) {
+      // Group translations by language
+      const translationsByLanguage = storyData.translations.reduce((acc, translation) => {
+        if (!acc[translation.language]) {
+          acc[translation.language] = [];
+        }
+        acc[translation.language].push(translation);
+        return acc;
+      }, {} as Record<string, typeof storyData.translations>);
+      
+      // Create a folder for each language
+      Object.entries(translationsByLanguage).forEach(([language, translations]) => {
+        const languageFolder = zip.folder(language);
+        
+        // Create translated story data for this language
+        const translatedStoryData = {
+          ...storyData,
+          scenes: storyData.scenes.map(scene => {
+            const sceneTranslation = translations.find(t => t.sceneId === scene.id);
+            if (sceneTranslation) {
+              return {
+                ...scene,
+                title: sceneTranslation.title,
+                content: sceneTranslation.content,
+                beats: sceneTranslation.beats || scene.beats
+              };
+            }
+            return scene;
+          })
+        };
+        
+        const translatedBackupData: StoryBackup = {
+          story: translatedStoryData,
+          metadata: {
+            ...backupData.metadata,
+            language: language
+          }
+        };
+        
+        languageFolder?.file('story.json', JSON.stringify(translatedBackupData, null, 2));
+      });
+    }
 
     // Create folders for assets
     const imagesFolder = zip.folder('images');
@@ -128,18 +173,31 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
     
     console.log(`[Export] Successfully exported ${exportedVideoCount} out of ${videoIds.size} videos`);
 
-    // Export audio files (if they exist in localStorage)
-    storyData.scenes.forEach((scene: Scene) => {
-      const audioData = localStorage.getItem(`audio_${scene.id}`);
-      if (audioData && audioFolder) {
+    // Export audio files (collect all audio from localStorage)
+    console.log('[Export] Collecting audio files from localStorage...');
+    let exportedAudioCount = 0;
+    
+    // Get all localStorage keys that start with 'audio_'
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('audio_')) {
         try {
-          const audioBlob = dataURLToBlob(audioData);
-          audioFolder.file(`${scene.id}.mp3`, audioBlob);
+          const audioData = localStorage.getItem(key);
+          if (audioData && audioFolder) {
+            const audioBlob = dataURLToBlob(audioData);
+            // Use the full key as filename to preserve the structure
+            // Format: audio_sceneId_beatId_language_speaker_timestamp.mp3
+            audioFolder.file(`${key}.mp3`, audioBlob);
+            exportedAudioCount++;
+            console.log(`[Export] Successfully exported audio: ${key}.mp3`);
+          }
         } catch (error) {
-          console.warn(`Failed to export audio for scene ${scene.id}:`, error);
+          console.warn(`[Export] Failed to export audio ${key}:`, error);
         }
       }
-    });
+    }
+    
+    console.log(`[Export] Successfully exported ${exportedAudioCount} audio files`);
 
     // Generate the ZIP file
     const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -331,31 +389,118 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
     }
 
     // Import audio files
+    console.log('[Import] Processing audio files...');
     const audioFolder = zipContent.folder('audio');
     if (audioFolder) {
       const audioFiles = Object.keys(audioFolder.files).filter(name => 
-        name.startsWith('audio/') && !name.endsWith('/')
+        name.startsWith('audio/') && !name.endsWith('/') && name.endsWith('.mp3')
       );
+      
+      console.log(`[Import] Found ${audioFiles.length} audio files`);
 
       for (const audioPath of audioFiles) {
         const audioFile = zipContent.file(audioPath);
         if (audioFile) {
-          const audioBlob = await audioFile.async('blob');
-          const oldSceneId = audioPath.split('/')[1].split('.')[0];
-          
-          // Find the corresponding new scene ID
-          const newSceneId = oldToNewSceneIds.get(oldSceneId);
-          if (newSceneId) {
-            // Convert blob to data URL and store in localStorage
-            const dataURL = await blobToDataURL(audioBlob);
-            localStorage.setItem(`audio_${newSceneId}`, dataURL);
+          try {
+            const audioBlob = await audioFile.async('blob');
+            // Extract the localStorage key from the filename
+            // Format: audio/audio_sceneId_beatId_language_speaker_timestamp.mp3
+            const filename = audioPath.split('/')[1]; // Remove 'audio/' prefix
+            const localStorageKey = filename.replace('.mp3', ''); // Remove .mp3 extension
+            
+            // Check if this is one of our audio files (starts with 'audio_')
+            if (localStorageKey.startsWith('audio_')) {
+              // Extract the old scene ID from the key to map to new scene ID
+              const keyParts = localStorageKey.split('_');
+              if (keyParts.length >= 2) {
+                const oldSceneId = keyParts[1]; // audio_SCENEID_...
+                const newSceneId = oldToNewSceneIds.get(oldSceneId);
+                
+                if (newSceneId) {
+                  // Create new localStorage key with the new scene ID
+                  const newKey = localStorageKey.replace(`_${oldSceneId}_`, `_${newSceneId}_`);
+                  
+                  // Convert blob to data URL and store in localStorage
+                  const dataURL = await blobToDataURL(audioBlob);
+                  localStorage.setItem(newKey, dataURL);
+                  console.log(`[Import] Successfully imported audio: ${newKey}`);
+                } else {
+                  console.warn(`[Import] No new scene ID found for old scene ID: ${oldSceneId}`);
+                }
+              }
+            }
+          } catch (error) {
+            console.warn(`[Import] Failed to import audio file ${audioPath}:`, error);
           }
         }
       }
     }
 
-    console.log('Story imported successfully');
-    return updatedStory;
+    // Process translations from language folders
+    const translations: Translation[] = [];
+    let detectedLanguage = 'en';
+    
+    // Check for language folders (es, pt, ja, etc.)
+    const languageFolders = allFiles.filter(path => 
+      path.includes('/story.json') && path !== 'story.json'
+    );
+    
+    console.log(`[Import] Found ${languageFolders.length} language folders:`, languageFolders);
+    
+    for (const langPath of languageFolders) {
+      const language = langPath.split('/')[0];
+      console.log(`[Import] Processing language: ${language}`);
+      
+      const langStoryFile = zipContent.file(langPath);
+      if (langStoryFile) {
+        try {
+          const langStoryText = await langStoryFile.async('text');
+          const langBackupData: StoryBackup = JSON.parse(langStoryText);
+          
+          // Extract translations from the translated story
+          if (langBackupData.story && langBackupData.story.scenes) {
+            langBackupData.story.scenes.forEach((translatedScene, index) => {
+              const originalScene = backupData.story.scenes[index];
+              if (originalScene && translatedScene) {
+                // Map old scene ID to new scene ID
+                const newSceneId = oldToNewSceneIds.get(originalScene.id) || originalScene.id;
+                
+                translations.push({
+                  id: `trans_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  sceneId: newSceneId,
+                  language: language,
+                  title: translatedScene.title,
+                  content: translatedScene.content,
+                  beats: translatedScene.beats || [],
+                  createdAt: new Date().toISOString(),
+                  version: '1.0'
+                });
+              }
+            });
+            
+            // Set the detected language (use the first non-English language found)
+            if (language !== 'en' && detectedLanguage === 'en') {
+              detectedLanguage = language;
+            }
+          }
+        } catch (error) {
+          console.error(`[Import] Failed to process language ${language}:`, error);
+        }
+      }
+    }
+    
+    console.log(`[Import] Processed ${translations.length} translations for ${detectedLanguage}`);
+    
+    // Add translations and language info to the story data
+    const finalStoryData = {
+      ...updatedStory,
+      translations,
+      currentLanguage: detectedLanguage,
+      narratorVoiceAssignments: backupData.story.narratorVoiceAssignments || {}
+    };
+    
+    console.log('Story imported successfully with translations');
+    return finalStoryData;
   } catch (error) {
     console.error('Failed to import story:', error);
     throw error;
