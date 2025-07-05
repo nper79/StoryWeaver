@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { StoryData, Scene, Connection, VoiceAssignment, Beat } from '../types'; 
-import { generateAudioWithAlignment, WordAlignment, ElevenLabsResponse } from '../elevenLabsService';
+import { generateAudioWithAlignment } from '../elevenLabsService';
 import { getImageFromStorage } from '../fileStorageService';
 import WordHighlightText from './WordHighlightText';
 
@@ -41,7 +41,14 @@ interface CharacterProfile {
   imageId?: string;
 }
 
-const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSceneId, elevenLabsApiKey, narratorVoiceId }) => {
+const PlayModal: React.FC<PlayModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  story, 
+  initialSceneId, 
+  elevenLabsApiKey, 
+  narratorVoiceId
+}) => {
   console.log(`🎙️ [PLAYMODAL] Received narratorVoiceId: ${narratorVoiceId || 'null/undefined'}`);
   const [currentSceneId, setCurrentSceneId] = useState<string | null>(initialSceneId);
   const [currentScene, setCurrentScene] = useState<Scene | null>(null);
@@ -82,11 +89,7 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
     }
   }, []);
 
-  // Use the centralized ElevenLabs service function
-  const generateSpeechWithTimestamps = async (text: string, voiceId: string, apiKey: string): Promise<ElevenLabsResponse> => {
-    console.log(' [PLAYMODAL] Generating speech with timestamps for:', text.substring(0, 50) + '...');
-    return await generateAudioWithAlignment(text, voiceId, apiKey);
-  };
+
 
   const extractWordTimestamps = (alignment: any): WordTimestamp[] => {
     console.log(' [TIMESTAMPS] Converting alignment data:', {
@@ -544,7 +547,7 @@ const PlayModal: React.FC<PlayModalProps> = ({ isOpen, onClose, story, initialSc
         }
         
         // Use ElevenLabs timestamps API for precise word-level highlighting
-        const response = await generateSpeechWithTimestamps(line.text, line.voiceId, keyToUse);
+        const response = await generateAudioWithAlignment(line.text, line.voiceId, keyToUse);
         if (isActive) {
           const url = URL.createObjectURL(response.audio);
           currentAudioBlobUrlRef.current = url;

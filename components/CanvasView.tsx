@@ -67,6 +67,11 @@ const CanvasView: React.FC<CanvasViewProps> = ({
   onUploadBeatVideo, // Destructure new prop
   generatingBeatImageFor, // Destructure new prop
 }) => {
+  // Safety check to prevent undefined destructuring
+  if (!storyData) {
+    return <div>Loading...</div>;
+  }
+  
   const { scenes, connections } = storyData;
   const [draggingSceneBody, setDraggingSceneBody] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
   

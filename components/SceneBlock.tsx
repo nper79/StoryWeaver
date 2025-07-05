@@ -106,6 +106,13 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
     loadStoredImage();
   }, [scene.generatedImageId, scene.title]);
 
+  // Sync editedPrompt when scene.generatedImagePrompt changes
+  useEffect(() => {
+    if (!isEditingPrompt) {
+      setEditedPrompt(scene.generatedImagePrompt || '');
+    }
+  }, [scene.generatedImagePrompt, isEditingPrompt]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -276,6 +283,13 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
                 onImageGenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
                 onImageRegenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
                 onVideoUpload={onUploadBeatVideo ? (beatId, videoFile) => onUploadBeatVideo(scene.id, beatId, videoFile) : undefined}
+                onBeatUpdate={(beatId, updates) => {
+                  // Update the specific beat within the scene
+                  const updatedBeats = scene.beats!.map(b => 
+                    b.id === beatId ? { ...b, ...updates } : b
+                  );
+                  onUpdate(scene.id, { beats: updatedBeats });
+                }}
                 generatingImage={generatingBeatImageFor?.sceneId === scene.id && generatingBeatImageFor?.beatId === beat.id}
               />
             ))}
@@ -398,6 +412,7 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
                 e.stopPropagation();
                 if (isEditingPrompt) {
                   // Save the edited prompt
+                  console.log('Saving prompt:', editedPrompt);
                   onUpdate(scene.id, { generatedImagePrompt: editedPrompt });
                   setIsEditingPrompt(false);
                 } else {
@@ -439,6 +454,7 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
                 e.stopPropagation();
                 if (e.key === 'Enter' && e.ctrlKey) {
                   // Ctrl+Enter to save
+                  console.log('Saving prompt via Ctrl+Enter:', editedPrompt);
                   onUpdate(scene.id, { generatedImagePrompt: editedPrompt });
                   setIsEditingPrompt(false);
                 } else if (e.key === 'Escape') {

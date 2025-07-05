@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { Scene, Connection, StoryData, VoiceAssignment } from './types';
+import type { Scene, Connection, StoryData, VoiceAssignment, Translation, NarratorVoiceAssignments } from './types';
 import Toolbar from './components/Toolbar';
 import CanvasView from './components/CanvasView';
 import ZoomControls from './components/ZoomControls';
 import PlayModal from './components/PlayModal';
 import VoiceSettingsModal from './components/VoiceSettingsModal';
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
+import { TranslationService } from './services/translationService';
 
 
 import { 
@@ -57,6 +59,7 @@ const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [voiceAssignments, setVoiceAssignments] = useState<VoiceAssignment[]>([]);
   const [narratorVoiceId, setNarratorVoiceId] = useState<string | null>(null);
+  const [narratorVoiceAssignments, setNarratorVoiceAssignments] = useState<NarratorVoiceAssignments>({});
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState<boolean>(false);
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null);
   const [openaiApiKey, setOpenaiApiKey] = useState<string | null>(null);
@@ -78,6 +81,9 @@ const App: React.FC = () => {
     let initialStartSceneId: string | null = null;
     let initialVoiceAssignments: VoiceAssignment[] = [];
     let initialNarratorVoiceId: string | null = null;
+    let initialNarratorVoiceAssignments: NarratorVoiceAssignments = {};
+    let initialTranslations: Translation[] = [];
+    let initialCurrentLanguage: string = 'en';
 
     if (savedStory) {
       try {
@@ -92,6 +98,9 @@ const App: React.FC = () => {
         initialStartSceneId = parsedStory.startSceneId || localStorage.getItem(INITIAL_START_SCENE_ID_KEY) || null;
         initialVoiceAssignments = parsedStory.voiceAssignments || [];
         initialNarratorVoiceId = parsedStory.narratorVoiceId || null;
+        initialNarratorVoiceAssignments = parsedStory.narratorVoiceAssignments || {};
+        initialTranslations = parsedStory.translations || [];
+        initialCurrentLanguage = parsedStory.currentLanguage || 'en';
         
         // Check if we need to migrate image data from localStorage to IndexedDB
         const scenesMigrationNeeded = initialScenes.some(scene => (scene as any).generatedImageUrl && !scene.generatedImageId);
@@ -216,6 +225,9 @@ const App: React.FC = () => {
     setStartSceneId(initialStartSceneId);
     setVoiceAssignments(initialVoiceAssignments);
     setNarratorVoiceId(initialNarratorVoiceId);
+    setNarratorVoiceAssignments(initialNarratorVoiceAssignments);
+    setTranslations(initialTranslations);
+    setCurrentLanguage(initialCurrentLanguage);
 
     const savedZoom = localStorage.getItem(ZOOM_LEVEL_KEY);
     if (savedZoom) {
@@ -360,6 +372,35 @@ const App: React.FC = () => {
   const deleteConnection = (id: string) => {
     setConnections(prevConnections => prevConnections.filter(conn => conn.id !== id));
   };
+
+  // Handler functions for CanvasView
+  const handleSceneMove = (sceneId: string, x: number, y: number) => {
+    updateScene(sceneId, { x, y });
+  };
+
+  const handleSceneResize = (sceneId: string, width: number, height: number) => {
+    updateScene(sceneId, { width, height });
+  };
+
+  const handleSceneEdit = (sceneId: string) => {
+    setActiveSceneId(sceneId);
+  };
+
+  const handleSceneDelete = (sceneId: string) => {
+    deleteScene(sceneId);
+  };
+
+  const handleConnectionCreate = (fromSceneId: string, toSceneId: string, label: string) => {
+    addConnection(fromSceneId, toSceneId, label);
+  };
+
+  const handleConnectionDelete = (connectionId: string) => {
+    deleteConnection(connectionId);
+  };
+
+  const handleConnectionEdit = (connectionId: string, newLabel: string) => {
+    updateConnectionLabel(connectionId, newLabel);
+  };
   
   const handleSetStartScene = () => {
     if (activeSceneId) { 
@@ -372,7 +413,16 @@ const App: React.FC = () => {
   };
 
   const handleSave = () => {
-    const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
+    const storyData: StoryData = { 
+      scenes, 
+      connections, 
+      startSceneId, 
+      voiceAssignments,
+      translations,
+      currentLanguage,
+      narratorVoiceId: narratorVoiceId || undefined,
+      narratorVoiceAssignments
+    };
     const json = JSON.stringify(storyData, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -387,7 +437,13 @@ const App: React.FC = () => {
 
   const handleExportZip = async () => {
     try {
-      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
+      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments, translations, currentLanguage, narratorVoiceId: narratorVoiceId || undefined, narratorVoiceAssignments };
+      
+      // Debug: Log what translations are being exported
+      console.log('🔍 Exporting translations:', translations);
+      console.log('🔍 Current language:', currentLanguage);
+      console.log('🔍 Full story data:', storyData);
+      
       await exportStoryToZip(storyData);
       alert('Story exported successfully as ZIP file!');
     } catch (error) {
@@ -1907,98 +1963,122 @@ const App: React.FC = () => {
     }
   };
 
-  const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments };
+  // Add translation state management
+  const [translations, setTranslations] = useState<Translation[]>([]);
+  const [currentLanguage, setCurrentLanguage] = useState<string>('en');
+
+  // Translation management functions
+  const handleAddTranslation = (translation: Translation) => {
+    setTranslations(prev => {
+      const existingIndex = prev.findIndex(t => t.language === translation.language);
+      if (existingIndex >= 0) {
+        // Replace existing translation
+        const updated = [...prev];
+        updated[existingIndex] = translation;
+        return updated;
+      } else {
+        // Add new translation
+        return [...prev, translation];
+      }
+    });
+  };
+
+
+
+  const storyData: StoryData = { 
+    scenes, 
+    connections, 
+    startSceneId, 
+    voiceAssignments,
+    translations,
+    currentLanguage
+  };
 
   return (
-    <div className="flex flex-col h-screen bg-slate-900">
-      <Toolbar
-        onAddScene={addScene}
-        onSave={handleSave}
-        onExportZip={handleExportZip}
-        onLoad={handleLoad}
-        onImportZip={handleImportZip}
-        onSetStartScene={handleSetStartScene}
-        isStartSceneSet={!!startSceneId && startSceneId === activeSceneId}
-        selectedSceneId={activeSceneId}
-        onOrganizeFlow={handleOrganizeFlowVertically}
-        onPlayStory={handlePlayStory}
-        canPlayStory={!!startSceneId}
-        onGenerateAllSceneImages={generateAllSceneImages}
-        isBulkGeneratingImages={isBulkGeneratingImages}
-        bulkImageProgress={bulkImageProgress}
-        onOpenSettings={() => setIsVoiceSettingsOpen(true)}
-        onMigrateBeats={handleMigrateBeats}
-        isMigratingBeats={isMigratingBeats}
-      />
-      <CanvasView
-        storyData={storyData}
-        onUpdateScene={updateScene}
-        onDeleteScene={deleteScene}
-        onAddConnection={addConnection}
-        onDeleteConnection={deleteConnection}
-        activeSceneId={activeSceneId}
-        setActiveSceneId={setActiveSceneId}
-        startSceneId={startSceneId}
-        zoomLevel={zoomLevel}
-        onAddMultipleOptions={handleAddThreeOptions}
-        onAddTwoOptions={handleAddTwoOptions}
-        onAddOneOption={handleAddOneOption}
-        onAddInlineChoice={handleAddInlineChoice} 
-        onUpdateConnectionLabel={updateConnectionLabel}
-        onGenerateSceneImageForScene={generateSceneImageForScene}
-        generatingImageForScene={generatingImageForScene}
-        onContinueWithAI={handleContinueWithAI}
-        onContinueWithAI2Options={handleContinueWithAI2Options}
-        onContinueWithAI3Options={handleContinueWithAI3Options}
-        generatingContinuationForScene={generatingContinuationForScene}
-        onRewriteText={handleRewriteText}
-        rewritingTextForScene={rewritingTextForScene}
-        onSubdivideIntoBeats={handleSubdivideIntoBeats}
-        subdividingSceneIntoBeats={subdividingSceneIntoBeats}
-        onGenerateBeatImage={handleGenerateBeatImage}
-        onGenerateAllBeatImages={handleGenerateAllBeatImages}
-        onUploadBeatVideo={handleUploadBeatVideo}
-        generatingBeatImageFor={generatingBeatImageFor}
-      />
-      <ZoomControls
-        zoomLevel={zoomLevel}
-        onZoomIn={handleZoomIn}
-        onZoomOut={handleZoomOut}
-        onResetZoom={handleResetZoom}
-      />
-      {isPlaying && startSceneId && (
-        <PlayModal
-          isOpen={isPlaying}
-          onClose={handleClosePlayModal}
-          story={storyData}
-          initialSceneId={startSceneId}
-          elevenLabsApiKey={elevenLabsApiKey}
-          narratorVoiceId={narratorVoiceId}
+    <LanguageProvider 
+      initialLanguage={currentLanguage}
+      initialTranslations={translations}
+    >
+      <div className="flex flex-col h-screen bg-slate-900">
+        <Toolbar
+          onAddScene={addScene}
+          onSave={handleSave}
+          onExportZip={handleExportZip}
+          onLoad={handleLoad}
+          onImportZip={handleImportZip}
+          onSetStartScene={handleSetStartScene}
+          isStartSceneSet={!!startSceneId && startSceneId === activeSceneId}
+          selectedSceneId={activeSceneId}
+          onOrganizeFlow={handleOrganizeFlowVertically}
+          onPlayStory={handlePlayStory}
+          canPlayStory={!!startSceneId}
+          onGenerateAllSceneImages={generateAllSceneImages}
+          isBulkGeneratingImages={isBulkGeneratingImages}
+          bulkImageProgress={bulkImageProgress}
+          onOpenSettings={() => setIsVoiceSettingsOpen(true)}
+          onMigrateBeats={handleMigrateBeats}
+          isMigratingBeats={isMigratingBeats}
         />
-      )}
-      
-      <VoiceSettingsModal
-        isOpen={isVoiceSettingsOpen}
-        onClose={() => setIsVoiceSettingsOpen(false)}
-        currentAssignments={voiceAssignments}
-        onSaveAssignments={setVoiceAssignments}
-        currentElevenLabsApiKey={elevenLabsApiKey}
-        onSetElevenLabsApiKey={setElevenLabsApiKey}
-        currentOpenaiApiKey={openaiApiKey}
-        onSetOpenaiApiKey={setOpenaiApiKey}
-        onGenerateImagePrompts={generateImagePrompts}
-        isGeneratingPrompts={isGeneratingPrompts}
-        characterAnalysisProgress={characterAnalysisProgress}
-        onGenerateAllSceneImages={generateAllSceneImages}
-        isBulkGeneratingImages={isBulkGeneratingImages}
-        bulkImageProgress={bulkImageProgress}
-        onMigrateBeats={handleMigrateBeats}
-        isMigratingBeats={isMigratingBeats}
-        currentNarratorVoiceId={narratorVoiceId || undefined}
-        onSetNarratorVoiceId={setNarratorVoiceId}
-      />
-
-    </div>
+        <div className="flex-1 relative overflow-hidden">
+          <CanvasView
+            storyData={storyData}
+            onUpdateScene={updateScene}
+            onDeleteScene={deleteScene}
+            onAddConnection={addConnection}
+            onDeleteConnection={deleteConnection}
+            setActiveSceneId={setActiveSceneId}
+            activeSceneId={activeSceneId}
+            onSceneSelect={setActiveSceneId}
+            zoomLevel={zoomLevel}
+            onGenerateSceneImageForScene={generateSceneImageForScene}
+            generatingImageForScene={generatingImageForScene}
+            onContinueWithAI={handleContinueWithAI}
+            onContinueWithAI2Options={handleContinueWithAI2Options}
+            onContinueWithAI3Options={handleContinueWithAI3Options}
+            generatingContinuationForScene={generatingContinuationForScene}
+            onRewriteText={handleRewriteText}
+            rewritingTextForScene={rewritingTextForScene}
+            onSubdivideIntoBeats={handleSubdivideIntoBeats}
+            subdividingSceneIntoBeats={subdividingSceneIntoBeats}
+            onGenerateBeatImage={handleGenerateBeatImage}
+            onGenerateAllBeatImages={handleGenerateAllBeatImages}
+            onUploadBeatVideo={handleUploadBeatVideo}
+            generatingBeatImageFor={generatingBeatImageFor}
+          />
+          <ZoomControls
+            zoomLevel={zoomLevel}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            onResetZoom={handleResetZoom}
+          />
+          {isPlaying && startSceneId && (
+            <PlayModal
+              isOpen={isPlaying}
+              onClose={handleClosePlayModal}
+              story={storyData}
+              initialSceneId={startSceneId}
+              elevenLabsApiKey={elevenLabsApiKey}
+              narratorVoiceId={narratorVoiceId}
+            />
+          )}
+          
+          <VoiceSettingsModal
+            isOpen={isVoiceSettingsOpen}
+            onClose={() => setIsVoiceSettingsOpen(false)}
+            currentAssignments={voiceAssignments}
+            onSaveAssignments={setVoiceAssignments}
+            currentElevenLabsApiKey={elevenLabsApiKey}
+            onSetElevenLabsApiKey={setElevenLabsApiKey}
+            currentNarratorVoiceId={narratorVoiceId}
+            onSetNarratorVoiceId={setNarratorVoiceId}
+            currentNarratorVoiceAssignments={narratorVoiceAssignments}
+            onSetNarratorVoiceAssignments={setNarratorVoiceAssignments}
+            scenes={scenes}
+            onAddTranslation={handleAddTranslation}
+          />
+        </div>
+      </div>
+    </LanguageProvider>
   );
 };
 

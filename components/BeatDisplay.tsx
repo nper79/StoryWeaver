@@ -8,6 +8,7 @@ interface BeatDisplayProps {
   onImageGenerate?: (beatId: string) => void;
   onImageRegenerate?: (beatId: string) => void;
   onVideoUpload?: (beatId: string, videoFile: File) => void;
+  onBeatUpdate?: (beatId: string, updates: Partial<Beat>) => void;
   generatingImage?: boolean;
 }
 
@@ -17,12 +18,16 @@ const BeatDisplay: React.FC<BeatDisplayProps> = ({
   onImageGenerate, 
   onImageRegenerate,
   onVideoUpload,
+  onBeatUpdate,
   generatingImage = false 
 }) => {
   const [imageLoading, setImageLoading] = useState(false);
   const [storedImage, setStoredImage] = useState<string | null>(null);
   const [videoLoading, setVideoLoading] = useState(false);
   const [storedVideo, setStoredVideo] = useState<string | null>(null);
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [editedPrompt, setEditedPrompt] = useState(beat.imagePrompt || '');
+  const [isImageMaximized, setIsImageMaximized] = useState(false);
 
   useEffect(() => {
     const loadStoredImage = async () => {
@@ -42,6 +47,13 @@ const BeatDisplay: React.FC<BeatDisplayProps> = ({
     };
     loadStoredImage();
   }, [beat.imageId, beat.id]);
+
+  // Sync editedPrompt when beat.imagePrompt changes
+  useEffect(() => {
+    if (!isEditingPrompt) {
+      setEditedPrompt(beat.imagePrompt || '');
+    }
+  }, [beat.imagePrompt, isEditingPrompt]);
 
   useEffect(() => {
     const loadStoredVideo = async () => {
@@ -143,14 +155,29 @@ const BeatDisplay: React.FC<BeatDisplayProps> = ({
               <img 
                 src={storedImage}
                 alt={`Beat ${beat.order + 1} visual`}
-                className="w-full h-48 object-cover rounded-lg border border-slate-600"
+                className="w-full h-48 object-cover rounded-lg border border-slate-600 cursor-pointer"
+                onClick={() => setIsImageMaximized(true)}
+                title="Click to maximize image"
               />
             )}
             {/* Image overlay with regenerate and video upload options */}
             <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 rounded-lg flex items-center justify-center">
               <div className="opacity-0 group-hover:opacity-100 flex gap-2">
                 <button
-                  onClick={() => onImageRegenerate?.(beat.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsImageMaximized(true);
+                  }}
+                  className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md text-sm transition-all duration-200"
+                  title="Maximize image"
+                >
+                  🔍 Maximize
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onImageRegenerate?.(beat.id);
+                  }}
                   className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-sm transition-all duration-200"
                   disabled={generatingImage}
                 >
@@ -201,23 +228,133 @@ const BeatDisplay: React.FC<BeatDisplayProps> = ({
       {/* Text Section */}
       <div className="beat-text-container">
         <div className="beat-text bg-slate-800 border border-slate-600 rounded-lg p-4">
-          <p className="text-slate-200 leading-relaxed whitespace-pre-line">
-            {beat.text.replace(/\[[^\]]+\]/g, '').trim()}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-slate-200 leading-relaxed whitespace-pre-line flex-grow">
+              {beat.text.replace(/\[[^\]]+\]/g, '').trim()}
+            </p>
+            {/* Show remove annotations button only if text contains speaker annotations */}
+            {beat.text.includes('[') && beat.text.includes(']') && (
+              <button
+                onClick={() => {
+                  const cleanText = beat.text.replace(/\[[^\]]+\]/g, '').trim();
+                  onBeatUpdate?.(beat.id, { text: cleanText });
+                }}
+                className="text-xs px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors shrink-0"
+                title="Remove speaker annotations permanently"
+              >
+                🗑️ Remove Annotations
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Image prompt display (for debugging/editing) */}
+        {/* Image prompt display (editable) */}
         {beat.imagePrompt && (
           <details className="mt-2">
-            <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-300">
-              Image Prompt
+            <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-300 flex items-center gap-2">
+              <span>▼ Image Prompt</span>
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (isEditingPrompt) {
+                    // Save the edited prompt
+                    onBeatUpdate?.(beat.id, { imagePrompt: editedPrompt });
+                    setIsEditingPrompt(false);
+                  } else {
+                    // Start editing
+                    setEditedPrompt(beat.imagePrompt || '');
+                    setIsEditingPrompt(true);
+                  }
+                }}
+                className="text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                title={isEditingPrompt ? 'Save changes' : 'Edit prompt'}
+              >
+                {isEditingPrompt ? '💾 Save' : '✏️ Edit'}
+              </button>
             </summary>
-            <div className="mt-1 p-2 bg-slate-900 border border-slate-700 rounded text-xs text-slate-400">
-              {beat.imagePrompt}
+            <div className="mt-1 p-2 bg-slate-900 border border-slate-700 rounded text-xs">
+              {isEditingPrompt ? (
+                <textarea
+                  value={editedPrompt}
+                  onChange={(e) => setEditedPrompt(e.target.value)}
+                  className="w-full h-20 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300 text-xs resize-none focus:outline-none focus:border-blue-500"
+                  placeholder="Enter image prompt..."
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.ctrlKey) {
+                      // Save on Ctrl+Enter
+                      onBeatUpdate?.(beat.id, { imagePrompt: editedPrompt });
+                      setIsEditingPrompt(false);
+                    } else if (e.key === 'Escape') {
+                      // Cancel on Escape
+                      setEditedPrompt(beat.imagePrompt || '');
+                      setIsEditingPrompt(false);
+                    }
+                  }}
+                />
+              ) : (
+                <div className="text-slate-400 whitespace-pre-wrap">
+                  {beat.imagePrompt}
+                </div>
+              )}
+              {isEditingPrompt && (
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      onBeatUpdate?.(beat.id, { imagePrompt: editedPrompt });
+                      setIsEditingPrompt(false);
+                    }}
+                    className="text-xs px-2 py-1 rounded bg-green-600 hover:bg-green-700 text-white transition-colors"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditedPrompt(beat.imagePrompt || '');
+                      setIsEditingPrompt(false);
+                    }}
+                    className="text-xs px-2 py-1 rounded bg-gray-600 hover:bg-gray-700 text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <div className="text-xs text-slate-500 flex items-center ml-auto">
+                    Ctrl+Enter to save, Esc to cancel
+                  </div>
+                </div>
+              )}
             </div>
           </details>
         )}
       </div>
+
+      {/* Image Maximization Modal */}
+      {isImageMaximized && storedImage && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
+          onClick={() => setIsImageMaximized(false)}
+        >
+          <div className="relative max-w-[90vw] max-h-[90vh] p-4">
+            <img 
+              src={storedImage}
+              alt={`Beat ${beat.order + 1} visual - Maximized`}
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              onClick={() => setIsImageMaximized(false)}
+              className="absolute top-2 right-2 bg-black bg-opacity-50 hover:bg-opacity-75 text-white rounded-full p-2 transition-all duration-200"
+              title="Close maximized view"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white px-3 py-1 rounded-lg text-sm">
+              Beat {beat.order + 1}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Separator line (except for last beat) */}
       {!isLast && (
