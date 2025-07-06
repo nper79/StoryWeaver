@@ -72,6 +72,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
   const [audioCurrentTime, setAudioCurrentTime] = useState<number>(0);
   const [audioDuration, setAudioDuration] = useState<number>(0);
   const [isAudioPlaying, setIsAudioPlaying] = useState<boolean>(false);
+  const [audioSource, setAudioSource] = useState<'zip' | 'api' | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const characterProfileMap = useRef<Map<string, CharacterProfile>>(new Map());
@@ -136,14 +137,73 @@ const PlayModal: React.FC<PlayModalProps> = ({
 
 
 
+  // Function to retrieve saved alignment data from localStorage
+  const getSavedAlignmentData = (text: string, speaker: string, sceneId: string, beatId: string, language: string): any => {
+    console.log('🔍 [DEBUG ALIGNMENT] Searching for alignment data with:');
+    console.log('  - text:', text.substring(0, 50) + '...');
+    console.log('  - speaker:', speaker);
+    console.log('  - sceneId:', sceneId);
+    console.log('  - beatId:', beatId);
+    console.log('  - language:', language);
+    
+    // List all alignment keys for debugging
+    const alignmentKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('alignment_')) {
+        alignmentKeys.push(key);
+      }
+    }
+    console.log('🔍 [DEBUG ALIGNMENT] Available alignment keys:', alignmentKeys);
+    
+    // Search for alignment data in localStorage
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('alignment_')) {
+        try {
+          const alignmentData = JSON.parse(localStorage.getItem(key) || '{}');
+          console.log('🔍 [DEBUG ALIGNMENT] Checking key:', key);
+          console.log('  - stored text:', alignmentData.text?.substring(0, 50) + '...');
+          console.log('  - stored speaker:', alignmentData.speaker);
+          console.log('  - stored sceneId:', alignmentData.sceneId);
+          console.log('  - stored beatId:', alignmentData.beatId);
+          console.log('  - stored language:', alignmentData.language);
+          
+          if (
+            alignmentData.text === text &&
+            alignmentData.speaker === speaker &&
+            alignmentData.sceneId === sceneId &&
+            alignmentData.beatId === beatId &&
+            alignmentData.language === language
+          ) {
+            console.log('🎯 [CACHED ALIGNMENT] Found saved alignment data:', key);
+            return alignmentData.alignment;
+          }
+        } catch (error) {
+          console.warn('Failed to parse alignment data:', key, error);
+        }
+      }
+    }
+    console.log('⚠️ [DEBUG ALIGNMENT] No matching alignment data found');
+    return null;
+  };
+
   const extractWordTimestamps = (alignment: any): WordTimestamp[] => {
-    console.log(' [TIMESTAMPS] Converting alignment data:', {
+    console.log('🔍 [TIMESTAMPS] Converting alignment data:', {
       type: typeof alignment,
       isArray: Array.isArray(alignment),
       hasCharacters: alignment?.characters ? true : false,
       charactersLength: alignment?.characters?.length || 0,
       data: alignment
     });
+    
+    // Debug: Log the first few characters and their timestamps
+    if (alignment?.characters && alignment?.character_start_times_seconds) {
+      console.log('🔍 [TIMESTAMPS] First 10 characters with timestamps:');
+      for (let i = 0; i < Math.min(10, alignment.characters.length); i++) {
+        console.log(`  [${i}]: "${alignment.characters[i]}" -> ${alignment.character_start_times_seconds[i]}s - ${alignment.character_end_times_seconds[i]}s`);
+      }
+    }
     
     if (!alignment) {
       console.warn(' [TIMESTAMPS] Alignment is null/undefined');
@@ -163,18 +223,83 @@ const PlayModal: React.FC<PlayModalProps> = ({
         return [];
       }
       
+      // Helper function to detect if character is Japanese
+      const isJapanese = (char: string): boolean => {
+        const code = char.charCodeAt(0);
+        return (
+          (code >= 0x3040 && code <= 0x309F) || // Hiragana
+          (code >= 0x30A0 && code <= 0x30FF) || // Katakana
+          (code >= 0x4E00 && code <= 0x9FAF) || // CJK Unified Ideographs (Kanji)
+          (code >= 0xFF00 && code <= 0xFFEF)    // Full-width characters
+        );
+      };
+      
+      // Helper function to determine word boundaries for different languages
+      const isWordBoundary = (char: string, nextChar: string | null): boolean => {
+        // For space-separated languages (English, etc.)
+        if (char === ' ') return true;
+        
+        // For Japanese: create shorter segments for better highlighting
+        if (isJapanese(char)) {
+          // Break on punctuation
+          if ('。、！？：；'.includes(char)) return true;
+          
+          // Break between different character types (Hiragana/Katakana/Kanji)
+          if (nextChar) {
+            const currentType = getJapaneseCharType(char);
+            const nextType = getJapaneseCharType(nextChar);
+            
+            // Break between different types, but allow some combinations
+            if (currentType !== nextType) {
+              // Allow Hiragana after Kanji (common pattern)
+              if (currentType === 'kanji' && nextType === 'hiragana') return false;
+              // Allow Katakana sequences
+              if (currentType === 'katakana' && nextType === 'katakana') return false;
+              return true;
+            }
+          }
+          
+          // For long sequences, break every 2-3 characters to avoid very long highlights
+          return false;
+        }
+        
+        return false;
+      };
+      
+      const getJapaneseCharType = (char: string): string => {
+        const code = char.charCodeAt(0);
+        if (code >= 0x3040 && code <= 0x309F) return 'hiragana';
+        if (code >= 0x30A0 && code <= 0x30FF) return 'katakana';
+        if (code >= 0x4E00 && code <= 0x9FAF) return 'kanji';
+        return 'other';
+      };
+      
       // Convert character-based timestamps to word-based timestamps
       const wordTimestamps: WordTimestamp[] = [];
       let currentWord = '';
       let wordStartTime = 0;
+      let segmentLength = 0;
       
       for (let i = 0; i < characters.length; i++) {
         const char = characters[i];
         const startTime = startTimes[i];
         const endTime = endTimes[i];
+        const nextChar = i < characters.length - 1 ? characters[i + 1] : null;
         
-        if (char === ' ' || i === characters.length - 1) {
-          // End of word or end of text
+        // Add character to current word
+        if (currentWord === '') {
+          wordStartTime = startTime;
+        }
+        currentWord += char;
+        segmentLength++;
+        
+        // Check if we should end the current word
+        const shouldBreak = 
+          i === characters.length - 1 || // End of text
+          isWordBoundary(char, nextChar) || // Natural boundary
+          (isJapanese(char) && segmentLength >= 3); // Max 3 chars for Japanese segments
+        
+        if (shouldBreak) {
           if (currentWord.trim().length > 0) {
             wordTimestamps.push({
               word: currentWord.trim(),
@@ -182,26 +307,30 @@ const PlayModal: React.FC<PlayModalProps> = ({
               end_time_ms: Math.round(endTime * 1000)
             });
             
-            console.log(` [WORD ${wordTimestamps.length}]:`, {
+            console.log(`🎯 [WORD ${wordTimestamps.length + 1}]:`, {
               word: currentWord.trim(),
+              length: currentWord.trim().length,
               start_s: wordStartTime,
               end_s: endTime,
               start_ms: Math.round(wordStartTime * 1000),
-              end_ms: Math.round(endTime * 1000)
+              end_ms: Math.round(endTime * 1000),
+              isJapanese: isJapanese(currentWord.trim()),
+              charTypes: currentWord.trim().split('').map(c => getJapaneseCharType(c))
             });
           }
           
           currentWord = '';
+          segmentLength = 0;
           wordStartTime = i < characters.length - 1 ? startTimes[i + 1] : endTime;
-        } else {
-          if (currentWord === '') {
-            wordStartTime = startTime;
-          }
-          currentWord += char;
         }
       }
       
-      console.log(' [TIMESTAMPS] Converted', wordTimestamps.length, 'word timestamps from character data');
+      console.log('📊 [TIMESTAMPS] Converted', wordTimestamps.length, 'word timestamps from character data');
+      console.log('📊 [TIMESTAMPS] Summary of all segments:');
+      wordTimestamps.forEach((word, index) => {
+        console.log(`  ${index + 1}. "${word.word}" (${word.start_time_ms}ms - ${word.end_time_ms}ms) [${word.end_time_ms - word.start_time_ms}ms duration]`);
+      });
+      
       return wordTimestamps;
     }
     
@@ -602,20 +731,137 @@ const PlayModal: React.FC<PlayModalProps> = ({
           throw new Error('No ElevenLabs API key available');
         }
         
-        // Use ElevenLabs timestamps API for precise word-level highlighting
-        const response = await generateAudioWithAlignment(line.text, line.voiceId, keyToUse);
-        if (isActive) {
-          const url = URL.createObjectURL(response.audio);
-          currentAudioBlobUrlRef.current = url;
+        // Check for cached audio first (from ZIP backup)
+        const currentScene = getTranslatedScene(story.scenes.find(s => s.id === story.currentSceneId) || story.scenes[0]);
+        const currentBeat = currentScene.beats?.[currentBeatIndex];
+        const audioId = `audio_${currentScene.id}_${currentBeat?.id || 'unknown'}_${currentLanguage}`;
+        const speaker = line.speaker || 'Narrator';
+        
+        // Look for cached audio in localStorage
+        console.log('🔍 [DEBUG] Searching for cached audio with pattern:', audioId);
+        console.log('🔍 [DEBUG] Speaker:', speaker);
+        console.log('🔍 [DEBUG] Current localStorage keys:');
+        
+        // List all localStorage keys for debugging
+        const allKeys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('audio_')) {
+            allKeys.push(key);
+          }
+        }
+        console.log('🔍 [DEBUG] Audio keys in localStorage:', allKeys);
+        
+        let cachedAudioUrl = null;
+        
+        // PRIMARY SEARCH: Try exact scene ID match
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(audioId) && key.includes(speaker)) {
+            const audioData = localStorage.getItem(key);
+            if (audioData) {
+              cachedAudioUrl = audioData;
+              console.log('💾 [ZIP AUDIO] Found cached audio from backup (exact match):', key);
+              break;
+            }
+          }
+        }
+        
+        // FALLBACK SEARCH: Try position-based matching if exact match fails
+        if (!cachedAudioUrl) {
+          console.log('🔍 [FALLBACK] Searching by scene/beat position...');
           
-          // Store timestamps for word-level highlighting
-          const wordTimestamps = extractWordTimestamps(response.alignment);
-          console.log('🎯 [TIMESTAMPS] Extracted word timestamps:', wordTimestamps.length, 'words');
+          // Get current scene and beat indices
+          const currentSceneIndex = story.scenes.findIndex(s => s.id === story.currentSceneId);
+          const sceneToUse = story.scenes[currentSceneIndex] || story.scenes[0];
+          const beatIndex = currentBeatIndex;
+          
+          console.log(`🔍 [POSITION] Looking for Scene ${currentSceneIndex + 1}, Beat ${beatIndex + 1}`);
+          
+          // Search for any audio that matches this position pattern
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('audio_') && key.includes(speaker) && key.includes(currentLanguage)) {
+              // Extract beat ID from key to match position
+              const beatIdMatch = key.match(/_beat_([^_]+)_/);
+              if (beatIdMatch) {
+                const keyBeatId = beatIdMatch[1];
+                // Check if this beat ID matches our current beat position
+                if (currentBeat?.id === keyBeatId || 
+                    (sceneToUse.beats && sceneToUse.beats[beatIndex]?.id === keyBeatId)) {
+                  const audioData = localStorage.getItem(key);
+                  if (audioData) {
+                    cachedAudioUrl = audioData;
+                    console.log(`🎯 [POSITION MATCH] Found audio by position - Scene ${currentSceneIndex + 1}, Beat ${beatIndex + 1}:`, key);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        // LAST RESORT: Try any audio with matching beat pattern and speaker
+        if (!cachedAudioUrl && currentBeat?.id) {
+          console.log('🔍 [LAST RESORT] Searching for any audio with matching beat ID and speaker...');
+          
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('audio_') && 
+                key.includes(currentBeat.id) && 
+                key.includes(speaker) && 
+                key.includes(currentLanguage)) {
+              const audioData = localStorage.getItem(key);
+              if (audioData) {
+                cachedAudioUrl = audioData;
+                console.log('🆘 [LAST RESORT] Found audio with matching beat/speaker:', key);
+                break;
+              }
+            }
+          }
+        }
+        
+        if (!cachedAudioUrl) {
+          console.log('⚠️ [DEBUG] No cached audio found after all search attempts. Pattern:', audioId, 'Speaker:', speaker);
+        }
+        
+        // Check for cached alignment data
+        const cachedAlignment = getSavedAlignmentData(
+          line.text, 
+          speaker, 
+          currentScene.id, 
+          currentBeat?.id || '', 
+          currentLanguage
+        );
+        
+        let alignment = null;
+        let audioUrl = null;
+        
+        if (cachedAudioUrl && cachedAlignment) {
+          // Both audio and alignment are cached - use ZIP data
+          console.log('🚀 [ZIP] Using cached audio and alignment from backup');
+          audioUrl = cachedAudioUrl;
+          alignment = cachedAlignment;
+          setAudioSource('zip');
+        } else {
+          // Generate fresh audio via API
+          console.log('🌐 [API] Generating fresh audio and alignment via ElevenLabs');
+          const response = await generateAudioWithAlignment(line.text, line.voiceId, keyToUse);
+          audioUrl = URL.createObjectURL(response.audio);
+          alignment = response.alignment;
+          setAudioSource('api');
+        }
+        if (isActive) {
+          currentAudioBlobUrlRef.current = audioUrl;
+          
+          // Store timestamps for word-level highlighting (use cached or fresh)
+          const wordTimestamps = extractWordTimestamps(alignment);
+          console.log('🎯 [TIMESTAMPS] Using word timestamps:', wordTimestamps.length, 'words', audioSource === 'zip' ? '(from ZIP)' : '(from API)');
           setWordTimestamps(wordTimestamps);
           
           if (audioRef.current) {
-            console.log('🎵 Audio blob created with timestamps, setting up playback...');
-            audioRef.current.src = url;
+            console.log('🎵 Audio ready for playback, source:', audioSource);
+            audioRef.current.src = audioUrl;
             audioRef.current.oncanplaythrough = () => {
               if (isActive) {
                 console.log('🎵 Audio ready to play, starting playback...');
@@ -636,6 +882,14 @@ const PlayModal: React.FC<PlayModalProps> = ({
               console.log('⏸️ Audio paused');
               setIsAudioPlaying(false);
             };
+            
+            // Add event listener to capture audio duration when metadata loads
+            audioRef.current.onloadedmetadata = () => {
+              const duration = audioRef.current?.duration || 0;
+              console.log(`🎯 [AUDIO DURATION] Audio metadata loaded, duration: ${duration.toFixed(2)}s`);
+              setAudioDuration(duration);
+            };
+            
             audioRef.current.onerror = () => {
                 console.error('❌ Audio element error');
                 if (isActive) setAudioError("Error playing audio file.");
@@ -944,9 +1198,36 @@ const PlayModal: React.FC<PlayModalProps> = ({
 
         {/* Top UI Bar */}
         <div className="absolute top-0 left-0 right-0 z-20 flex justify-between items-center p-4 bg-black/30 backdrop-blur-sm">
-          <h2 className="text-xl font-bold text-white truncate pr-4" title={currentScene?.title}>
-            {currentScene?.title}
-          </h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-xl font-bold text-white truncate pr-4" title={currentScene?.title}>
+              {currentScene?.title}
+            </h2>
+            {/* Audio Source Indicator */}
+            {audioSource && (
+              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
+                audioSource === 'zip' 
+                  ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                  : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+              }`}>
+                {audioSource === 'zip' ? (
+                  <>
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                    ZIP Backup
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M2 5a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 002 2H4a2 2 0 01-2-2V5zm3 1h6v4H5V6zm6 6H5v2h6v-2z" clipRule="evenodd" />
+                      <path d="M15 7h1a2 2 0 012 2v5.5a1.5 1.5 0 01-3 0V9a1 1 0 00-1-1h-1v4.5a1.5 1.5 0 01-3 0V8a1 1 0 011-1z" />
+                    </svg>
+                    API Streaming
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="text-white/80 hover:text-white text-2xl p-2 rounded-full bg-black/30 hover:bg-black/50 transition-all"

@@ -48,13 +48,20 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
       return;
     }
 
-    // Split text into words, preserving punctuation
-    const wordList = text.split(/(\s+)/).filter(word => word.trim().length > 0);
-    setWords(wordList);
-    setCurrentWordIndex(-1); // Reset highlighting
-    
-    console.log(` [WordHighlight] Parsed ${wordList.length} words from text`);
-  }, [text]);
+    // Use wordTimestamps if available (for precise timing like Japanese)
+    if (wordTimestamps && wordTimestamps.length > 0) {
+      const wordList = wordTimestamps.map(wt => wt.word);
+      setWords(wordList);
+      setCurrentWordIndex(-1); // Reset highlighting
+      console.log(`🎯 [WordHighlight] Using wordTimestamps: ${wordList.length} words:`, wordList);
+    } else {
+      // Fallback: Split text into words, preserving punctuation
+      const wordList = text.split(/(\s+)/).filter(word => word.trim().length > 0);
+      setWords(wordList);
+      setCurrentWordIndex(-1); // Reset highlighting
+      console.log(`📝 [WordHighlight] Parsed ${wordList.length} words from text (fallback)`);
+    }
+  }, [text, wordTimestamps]);
 
   // Ultra-precise millisecond-level word highlighting using multiple timing sources
   useEffect(() => {

@@ -1,6 +1,115 @@
 import JSZip from 'jszip';
-import { StoryData, VoiceAssignment, Scene } from './types';
+import { StoryData, VoiceAssignment, Scene, Translation, Beat } from './types';
 import { getImageFromStorage } from './fileStorageService';
+
+/**
+ * Check localStorage usage and available space
+ */
+function getLocalStorageUsage() {
+  let totalSize = 0;
+  let audioSize = 0;
+  let audioCount = 0;
+  
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key) {
+      const value = localStorage.getItem(key);
+      if (value) {
+        const itemSize = key.length + value.length;
+        totalSize += itemSize;
+        
+        if (key.startsWith('audio_') || key.startsWith('alignment_')) {
+          audioSize += itemSize;
+          audioCount++;
+        }
+      }
+    }
+  }
+  
+  return {
+    totalSize,
+    audioSize,
+    audioCount,
+    totalSizeMB: totalSize / (1024 * 1024),
+    audioSizeMB: audioSize / (1024 * 1024)
+  };
+}
+
+/**
+ * Clean up old audio/alignment files to free space
+ */
+function cleanupOldAudioFiles(keepRecentCount: number = 50) {
+  console.log('[Storage] Starting cleanup of old audio files...');
+  
+  const audioKeys: Array<{key: string, timestamp: number, size: number}> = [];
+  
+  // Collect all audio/alignment keys with timestamps
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith('audio_') || key.startsWith('alignment_'))) {
+      const value = localStorage.getItem(key);
+      if (value) {
+        // Extract timestamp from key (usually at the end)
+        const timestampMatch = key.match(/_([0-9]{13})_/);
+        const timestamp = timestampMatch ? parseInt(timestampMatch[1]) : 0;
+        
+        audioKeys.push({
+          key,
+          timestamp,
+          size: key.length + value.length
+        });
+      }
+    }
+  }
+  
+  // Sort by timestamp (newest first)
+  audioKeys.sort((a, b) => b.timestamp - a.timestamp);
+  
+  // Remove old files beyond keepRecentCount
+  let removedCount = 0;
+  let freedSpace = 0;
+  
+  for (let i = keepRecentCount; i < audioKeys.length; i++) {
+    const item = audioKeys[i];
+    localStorage.removeItem(item.key);
+    removedCount++;
+    freedSpace += item.size;
+    console.log(`[Storage] Removed old audio: ${item.key} (${Math.round(item.size / 1024)}KB)`);
+  }
+  
+  console.log(`[Storage] Cleanup complete: removed ${removedCount} files, freed ${Math.round(freedSpace / 1024)}KB`);
+  return { removedCount, freedSpace };
+}
+
+/**
+ * Attempt to store data in localStorage with quota handling
+ */
+function safeLocalStorageSetItem(key: string, value: string): boolean {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      console.warn(`[Storage] Quota exceeded when storing ${key}. Attempting cleanup...`);
+      
+      // Try cleanup and retry
+      const cleanup = cleanupOldAudioFiles(30);
+      
+      if (cleanup.removedCount > 0) {
+        try {
+          localStorage.setItem(key, value);
+          console.log(`[Storage] Successfully stored ${key} after cleanup`);
+          return true;
+        } catch (retryError) {
+          console.error(`[Storage] Still failed to store ${key} after cleanup:`, retryError);
+        }
+      }
+    } else {
+      console.error(`[Storage] Failed to store ${key}:`, error);
+    }
+    return false;
+  }
+}
 
 export interface StoryBackup {
   story: StoryData;
@@ -61,7 +170,10 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
                 ...scene,
                 title: sceneTranslation.title,
                 content: sceneTranslation.content,
-                beats: sceneTranslation.beats || scene.beats
+                beats: sceneTranslation.beats ? sceneTranslation.beats.map((beat, index) => ({
+                  ...beat,
+                  order: (beat as any).order ?? index
+                } as Beat)) : scene.beats
               };
             }
             return scene;
@@ -199,6 +311,33 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
     
     console.log(`[Export] Successfully exported ${exportedAudioCount} audio files`);
 
+    // Export alignment data (timing files)
+    console.log('[Export] Collecting alignment data from localStorage...');
+    let exportedAlignmentCount = 0;
+    
+    // Create alignment folder in ZIP
+    const alignmentFolder = zip.folder('alignment');
+    
+    // Get all localStorage keys that start with 'alignment_'
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('alignment_')) {
+        try {
+          const alignmentData = localStorage.getItem(key);
+          if (alignmentData && alignmentFolder) {
+            // Store as JSON file
+            alignmentFolder.file(`${key}.json`, alignmentData);
+            exportedAlignmentCount++;
+            console.log(`[Export] Successfully exported alignment: ${key}.json`);
+          }
+        } catch (error) {
+          console.warn(`[Export] Failed to export alignment ${key}:`, error);
+        }
+      }
+    }
+    
+    console.log(`[Export] Successfully exported ${exportedAlignmentCount} alignment files`);
+
     // Generate the ZIP file
     const zipBlob = await zip.generateAsync({ type: 'blob' });
 
@@ -249,7 +388,6 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
     // Generate new IDs to avoid conflicts
     const oldToNewImageIds = new Map<string, string>();
     const oldToNewVideoIds = new Map<string, string>();
-    const oldToNewSceneIds = new Map<string, string>();
 
     // Import images
     const imagesFolder = zipContent.folder('images');
@@ -315,13 +453,142 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
     
     console.log(`[Import] Video ID mapping:`, Object.fromEntries(oldToNewVideoIds));
 
+    // Create scene ID mapping FIRST (before importing audio/alignment)
+    console.log('[Import] Creating scene ID mapping...');
+    const oldToNewSceneIds = new Map<string, string>();
+    
+    // First, create mappings for scenes that exist in the story
+    backupData.story.scenes.forEach((scene: Scene) => {
+      const newSceneId = `scene_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      oldToNewSceneIds.set(scene.id, newSceneId);
+      console.log(`[Import] Scene mapping: ${scene.id} -> ${newSceneId}`);
+    });
+    
+    // Scan audio files to find additional old scene IDs that need mapping
+    console.log('[Import] Scanning audio files for additional scene IDs...');
+    const audioFolder = zipContent.folder('audio');
+    const additionalSceneIds = new Set<string>();
+    
+    if (audioFolder) {
+      const audioFiles = Object.keys(audioFolder.files).filter(name => 
+        name.startsWith('audio/') && !name.endsWith('/') && name.endsWith('.mp3')
+      );
+      
+      for (const audioPath of audioFiles) {
+        const filename = audioPath.split('/')[1];
+        const localStorageKey = filename.replace('.mp3', '');
+        
+        if (localStorageKey.startsWith('audio_')) {
+          const keyParts = localStorageKey.split('_');
+          const sceneIndex = keyParts.indexOf('scene');
+          
+          if (sceneIndex !== -1 && sceneIndex + 2 < keyParts.length) {
+            const oldSceneId = keyParts[sceneIndex] + '_' + keyParts[sceneIndex + 1] + '_' + keyParts[sceneIndex + 2];
+            if (!oldToNewSceneIds.has(oldSceneId)) {
+              additionalSceneIds.add(oldSceneId);
+            }
+          } else if (keyParts.length >= 2) {
+            // Handle format like audio_mcqxjx5tqb2h442_beat_... (without scene_ prefix)
+            const possibleSceneId = keyParts[1];
+            if (!oldToNewSceneIds.has(possibleSceneId)) {
+              additionalSceneIds.add(possibleSceneId);
+            }
+          }
+        }
+      }
+    }
+    
+    // Map additional scene IDs to the first available new scene (or create new ones)
+    const currentScenes = Array.from(oldToNewSceneIds.values());
+    const targetSceneId = currentScenes.length > 0 ? currentScenes[0] : `scene_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    additionalSceneIds.forEach(oldSceneId => {
+      oldToNewSceneIds.set(oldSceneId, targetSceneId);
+      console.log(`[Import] Additional scene mapping: ${oldSceneId} -> ${targetSceneId}`);
+    });
+    
+    console.log(`[Import] Created ${oldToNewSceneIds.size} scene ID mappings total`);
+    console.log(`[Import] All mappings:`, Array.from(oldToNewSceneIds.entries()));
+
+    // Import audio files (now that scene mapping exists)
+    console.log('[Import] Processing audio files...');
+    if (audioFolder) {
+      const audioFiles = Object.keys(audioFolder.files).filter(name => 
+        name.startsWith('audio/') && !name.endsWith('/') && name.endsWith('.mp3')
+      );
+      
+      console.log(`[Import] Found ${audioFiles.length} audio files`);
+
+      for (const audioPath of audioFiles) {
+        const audioFile = zipContent.file(audioPath);
+        if (audioFile) {
+          try {
+            const audioBlob = await audioFile.async('blob');
+            // Extract the localStorage key from the filename
+            // Format: audio/audio_sceneId_beatId_language_speaker_timestamp.mp3
+            const filename = audioPath.split('/')[1]; // Remove 'audio/' prefix
+            const localStorageKey = filename.replace('.mp3', ''); // Remove .mp3 extension
+            
+            // Check if this is one of our audio files (starts with 'audio_')
+            if (localStorageKey.startsWith('audio_')) {
+              // Extract the old scene ID from the key to map to new scene ID
+              const keyParts = localStorageKey.split('_');
+              let oldSceneId: string | null = null;
+              
+              // Handle two formats:
+              // 1. audio_scene_TIMESTAMP_RANDOMSTRING_beat_...
+              // 2. audio_SCENEID_beat_...
+              const sceneIndex = keyParts.indexOf('scene');
+              if (sceneIndex !== -1 && sceneIndex + 2 < keyParts.length) {
+                // Format 1: scene_TIMESTAMP_RANDOMSTRING
+                oldSceneId = keyParts[sceneIndex] + '_' + keyParts[sceneIndex + 1] + '_' + keyParts[sceneIndex + 2];
+              } else if (keyParts.length >= 2) {
+                // Format 2: direct scene ID (like mcqxjx5tqb2h442)
+                oldSceneId = keyParts[1];
+              }
+              
+              if (oldSceneId) {
+                const newSceneId = oldToNewSceneIds.get(oldSceneId);
+                console.log(`[Import] Audio key mapping: ${oldSceneId} -> ${newSceneId}`);
+                console.log(`[Import] Original audio key: ${localStorageKey}`);
+                
+                if (newSceneId) {
+                  // Create new localStorage key with the new scene ID
+                  const newKey = localStorageKey.replace(oldSceneId, newSceneId);
+                  
+                  // Convert blob to data URL and store in localStorage with quota handling
+                  const dataURL = await blobToDataURL(audioBlob);
+                  const stored = safeLocalStorageSetItem(newKey, dataURL);
+                  
+                  if (stored) {
+                    console.log(`[Import] ✅ Successfully imported audio:`);
+                    console.log(`[Import]   - Old key: ${localStorageKey}`);
+                    console.log(`[Import]   - New key: ${newKey}`);
+                    console.log(`[Import]   - Scene mapping: ${oldSceneId} -> ${newSceneId}`);
+                  } else {
+                    console.error(`[Import] ❌ Failed to store audio ${newKey} - storage quota exceeded`);
+                  }
+                } else {
+                  console.warn(`[Import] ❌ No new scene ID found for old scene ID: ${oldSceneId}`);
+                  console.warn(`[Import] Available mappings:`, Array.from(oldToNewSceneIds.keys()));
+                }
+              } else {
+                console.warn(`[Import] ❌ Could not extract scene ID from audio key: ${localStorageKey}`);
+              }
+            }
+          } catch (error) {
+            console.warn(`[Import] Failed to import audio file ${audioPath}:`, error);
+          }
+        }
+      }
+    }
+
     // Update story with new IDs
     const updatedStory: StoryData = { ...backupData.story };
 
     // Generate new scene IDs and update scenes
     updatedStory.scenes = updatedStory.scenes.map((scene: Scene) => {
-      const newSceneId = `scene_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      oldToNewSceneIds.set(scene.id, newSceneId);
+      const newSceneId = oldToNewSceneIds.get(scene.id) || `scene_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       // Update beat images and videos with new IDs if scene has beats
       let updatedBeats = scene.beats;
@@ -388,49 +655,76 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
       }));
     }
 
-    // Import audio files
-    console.log('[Import] Processing audio files...');
-    const audioFolder = zipContent.folder('audio');
-    if (audioFolder) {
-      const audioFiles = Object.keys(audioFolder.files).filter(name => 
-        name.startsWith('audio/') && !name.endsWith('/') && name.endsWith('.mp3')
+
+
+    // Import alignment data (timing files)
+    console.log('[Import] Processing alignment data...');
+    const alignmentFolder = zipContent.folder('alignment');
+    if (alignmentFolder) {
+      const alignmentFiles = Object.keys(alignmentFolder.files).filter(name => 
+        name.startsWith('alignment/') && !name.endsWith('/') && name.endsWith('.json')
       );
       
-      console.log(`[Import] Found ${audioFiles.length} audio files`);
+      console.log(`[Import] Found ${alignmentFiles.length} alignment files`);
 
-      for (const audioPath of audioFiles) {
-        const audioFile = zipContent.file(audioPath);
-        if (audioFile) {
+      for (const alignmentPath of alignmentFiles) {
+        const alignmentFile = zipContent.file(alignmentPath);
+        if (alignmentFile) {
           try {
-            const audioBlob = await audioFile.async('blob');
-            // Extract the localStorage key from the filename
-            // Format: audio/audio_sceneId_beatId_language_speaker_timestamp.mp3
-            const filename = audioPath.split('/')[1]; // Remove 'audio/' prefix
-            const localStorageKey = filename.replace('.mp3', ''); // Remove .mp3 extension
+            const alignmentText = await alignmentFile.async('text');
+            const alignmentData = JSON.parse(alignmentText);
             
-            // Check if this is one of our audio files (starts with 'audio_')
-            if (localStorageKey.startsWith('audio_')) {
+            // Extract the localStorage key from the filename
+            // Format: alignment/alignment_sceneId_beatId_language_speaker_timestamp.json
+            const filename = alignmentPath.split('/')[1]; // Remove 'alignment/' prefix
+            const localStorageKey = filename.replace('.json', ''); // Remove .json extension
+            
+            // Check if this is one of our alignment files (starts with 'alignment_')
+            if (localStorageKey.startsWith('alignment_')) {
               // Extract the old scene ID from the key to map to new scene ID
               const keyParts = localStorageKey.split('_');
-              if (keyParts.length >= 2) {
-                const oldSceneId = keyParts[1]; // audio_SCENEID_...
+              let oldSceneId: string | null = null;
+              
+              // Handle two formats:
+              // 1. alignment_audio_scene_TIMESTAMP_RANDOMSTRING_beat_...
+              // 2. alignment_audio_SCENEID_beat_...
+              const sceneIndex = keyParts.indexOf('scene');
+              if (sceneIndex !== -1 && sceneIndex + 2 < keyParts.length) {
+                // Format 1: scene_TIMESTAMP_RANDOMSTRING
+                oldSceneId = keyParts[sceneIndex] + '_' + keyParts[sceneIndex + 1] + '_' + keyParts[sceneIndex + 2];
+              } else if (keyParts.length >= 3) {
+                // Format 2: direct scene ID (like alignment_audio_mcqxjx5tqb2h442_beat_...)
+                oldSceneId = keyParts[2];
+              }
+              
+              if (oldSceneId) {
                 const newSceneId = oldToNewSceneIds.get(oldSceneId);
+                console.log(`[Import] Alignment key mapping: ${oldSceneId} -> ${newSceneId}`);
                 
                 if (newSceneId) {
-                  // Create new localStorage key with the new scene ID
-                  const newKey = localStorageKey.replace(`_${oldSceneId}_`, `_${newSceneId}_`);
+                  // Update the alignment data with new scene ID
+                  alignmentData.sceneId = newSceneId;
                   
-                  // Convert blob to data URL and store in localStorage
-                  const dataURL = await blobToDataURL(audioBlob);
-                  localStorage.setItem(newKey, dataURL);
-                  console.log(`[Import] Successfully imported audio: ${newKey}`);
+                  // Create new localStorage key with the new scene ID
+                  const newKey = localStorageKey.replace(oldSceneId, newSceneId);
+                  
+                  // Store alignment data in localStorage with quota handling
+                  const stored = safeLocalStorageSetItem(newKey, JSON.stringify(alignmentData));
+                  
+                  if (stored) {
+                    console.log(`[Import] ✅ Successfully imported alignment: ${newKey}`);
+                  } else {
+                    console.error(`[Import] ❌ Failed to store alignment ${newKey} - storage quota exceeded`);
+                  }
                 } else {
-                  console.warn(`[Import] No new scene ID found for old scene ID: ${oldSceneId}`);
+                  console.warn(`[Import] ❌ No new scene ID found for old scene ID in alignment: ${oldSceneId}`);
                 }
+              } else {
+                console.warn(`[Import] ❌ Could not extract scene ID from alignment key: ${localStorageKey}`);
               }
             }
           } catch (error) {
-            console.warn(`[Import] Failed to import audio file ${audioPath}:`, error);
+            console.warn(`[Import] Failed to import alignment file ${alignmentPath}:`, error);
           }
         }
       }
@@ -525,7 +819,6 @@ async function saveImageBlobToStorage(imageId: string, blob: Blob): Promise<void
       
       // Determine file type and extension based on blob type or imageId prefix
       const isVideo = imageId.startsWith('vid_') || blob.type.startsWith('video/');
-      const isImage = imageId.startsWith('img_') || blob.type.startsWith('image/');
       
       let filename: string;
       let type: string;
@@ -592,7 +885,15 @@ function dataURLToBlob(dataURL: string): Blob {
 function blobToDataURL(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
+    reader.onload = () => {
+      let result = reader.result as string;
+      // Fix content type for MP3 audio files
+      if (result.startsWith('data:application/octet-stream;base64,')) {
+        result = result.replace('data:application/octet-stream;base64,', 'data:audio/mp3;base64,');
+        console.log('[Import] 🔧 Fixed audio content type to audio/mp3');
+      }
+      resolve(result);
+    };
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });

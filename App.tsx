@@ -2115,6 +2115,8 @@ const App: React.FC = () => {
                 
                 if (audioResponse && audioResponse.audio) {
                   const audioBlob = audioResponse.audio;
+                  const timestamp = Date.now();
+                  
                   // Convert to data URL and store
                   const dataURL = await new Promise<string>((resolve) => {
                     const reader = new FileReader();
@@ -2122,9 +2124,25 @@ const App: React.FC = () => {
                     reader.readAsDataURL(audioBlob);
                   });
                   
-                  // Store in localStorage with unique ID
-                  const partAudioId = `${audioId}_${part.speaker}_${Date.now()}`;
+                  // Store audio in localStorage with unique ID
+                  const partAudioId = `${audioId}_${part.speaker}_${timestamp}`;
                   localStorage.setItem(partAudioId, dataURL);
+                  
+                  // Store alignment data (timings) separately
+                  if (audioResponse.alignment) {
+                    const alignmentId = `alignment_${audioId}_${part.speaker}_${timestamp}`;
+                    const alignmentData = {
+                      text: part.text,
+                      speaker: part.speaker,
+                      language: language,
+                      sceneId: scene.id,
+                      beatId: beat.id,
+                      alignment: audioResponse.alignment,
+                      timestamp: timestamp
+                    };
+                    localStorage.setItem(alignmentId, JSON.stringify(alignmentData));
+                    console.log(`[Audio Download] Cached alignment data for ${part.speaker} in ${language}`);
+                  }
                   
                   console.log(`[Audio Download] Cached audio for ${part.speaker} in ${language}`);
                   totalSuccess++;
