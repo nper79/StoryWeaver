@@ -103,18 +103,49 @@ const PlayModal: React.FC<PlayModalProps> = ({
     console.log(`🌍 [TRANSLATION] Found translation:`, !!translation);
     if (translation) {
       console.log(`🌍 [TRANSLATION] Translation has beats:`, !!translation.beats, translation.beats?.length || 0);
+      
+      // Merge translated beats with original beats to preserve imageId and videoId
+      let mergedBeats = scene.beats;
+      if (translation.beats && scene.beats) {
+        console.log(`🌍 [TRANSLATION] Merging translated beats with original beats`);
+        console.log(`🌍 [TRANSLATION] Original beats:`, scene.beats.length);
+        console.log(`🌍 [TRANSLATION] Translated beats:`, translation.beats.length);
+        
+        mergedBeats = translation.beats.map((translatedBeat, index) => {
+          const originalBeat = scene.beats?.[index];
+          const mergedBeat = {
+            ...translatedBeat,
+            order: index,
+            // Preserve imageId and videoId from original beat
+            imageId: originalBeat?.imageId || translatedBeat.imageId,
+            videoId: originalBeat?.videoId || translatedBeat.videoId,
+            imagePrompt: originalBeat?.imagePrompt || translatedBeat.imagePrompt
+          };
+          
+          console.log(`🌍 [TRANSLATION] Beat ${index}:`, {
+            text: translatedBeat.text.substring(0, 30) + '...',
+            hasImageId: !!mergedBeat.imageId,
+            hasVideoId: !!mergedBeat.videoId,
+            imageId: mergedBeat.imageId,
+            videoId: mergedBeat.videoId
+          });
+          
+          return mergedBeat;
+        });
+      }
+      
       const translatedScene = {
         ...scene,
         title: translation.title,
         content: translation.content,
-        beats: translation.beats?.map((beat, index) => ({
-          ...beat,
-          order: index // Ensure order is set for translated beats
-        })) || scene.beats
+        beats: mergedBeats
       };
+      
       console.log(`🌍 [TRANSLATION] Translated scene beats:`, translatedScene.beats?.length || 0);
       if (translatedScene.beats && translatedScene.beats.length > 0) {
         console.log(`🌍 [TRANSLATION] First beat text:`, translatedScene.beats[0].text.substring(0, 50) + '...');
+        console.log(`🌍 [TRANSLATION] First beat has imageId:`, !!translatedScene.beats[0].imageId);
+        console.log(`🌍 [TRANSLATION] First beat has videoId:`, !!translatedScene.beats[0].videoId);
       }
       return translatedScene;
     }
