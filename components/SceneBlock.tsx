@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { Scene, Connection, Translation } from '../types';
+import type { Scene, Connection, Translation, ConnectionTranslation } from '../types';
 import EditableText from './EditableText';
 import BeatDisplay from './BeatDisplay';
 import { DEFAULT_SCENE_MIN_HEIGHT, DEFAULT_SCENE_WIDTH } from '../constants';
@@ -39,6 +39,7 @@ interface SceneBlockProps {
   generatingBeatImageFor: { sceneId: string; beatId: string } | null; // New prop for beat image loading state
   currentLanguage: string; // Current language for translations
   translations: Translation[]; // Available translations
+  connectionTranslations?: ConnectionTranslation[]; // Available connection translations
 }
 
 const SceneBlock: React.FC<SceneBlockProps> = ({
@@ -74,6 +75,7 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
   generatingBeatImageFor, // New prop for beat image loading state
   currentLanguage, // Current language for translations
   translations, // Available translations
+  connectionTranslations, // Available connection translations
 }) => {
   const [isAddingNewChoice, setIsAddingNewChoice] = useState(false);
   const [newChoiceInputText, setNewChoiceInputText] = useState('');
@@ -100,14 +102,68 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
     );
     
     if (translation) {
+      // 🔍 DEBUG: Check translation.beats structure
+      console.log(`[SceneBlock] 🔍 Translation found for scene ${scene.id}:`);
+      console.log(`[SceneBlock] 🔍 translation.beats:`, translation.beats);
+      console.log(`[SceneBlock] 🔍 translation.beats length:`, translation.beats?.length);
+      console.log(`[SceneBlock] 🔍 scene.beats length:`, scene.beats?.length);
+      console.log(`[SceneBlock] 🔍 Full translation object:`, translation);
+      
+      // 🔍 DEBUG: Inspect beat structures in detail
+      console.log(`[SceneBlock] 🔍 First original beat full structure:`, scene.beats?.[0]);
+      console.log(`[SceneBlock] 🔍 First translated beat full structure:`, translation.beats?.[0]);
+      
+      // 🔧 CRITICAL FIX: Always use scene.beats (with updated asset IDs) but merge translated content
+      const translatedBeats = scene.beats?.map((originalBeat, index) => {
+        const translatedBeat = translation.beats?.[index];
+        console.log(`[SceneBlock] 🔍 Beat ${index}:`);
+        console.log(`[SceneBlock] 🔍   - Original beat:`, originalBeat);
+        console.log(`[SceneBlock] 🔍   - Translated beat:`, translatedBeat);
+        console.log(`[SceneBlock] 🔍   - Original content: "${originalBeat?.content}"`);
+        console.log(`[SceneBlock] 🔍   - Translated content: "${translatedBeat?.content}"`);
+        console.log(`[SceneBlock] 🔍   - Original text: "${originalBeat?.text}"`);
+        console.log(`[SceneBlock] 🔍   - Translated text: "${translatedBeat?.text}"`);
+        
+        return {
+          ...originalBeat, // Keep original beat with updated asset IDs
+          text: translatedBeat?.text || translatedBeat?.content || originalBeat.text || originalBeat.content, // Use translated text if available
+          order: index // Preserve correct order
+        };
+      }) || scene.beats;
+      
+      console.log(`[SceneBlock] 🌐 Using translated scene for ${currentLanguage}, beats with updated IDs:`, translatedBeats?.slice(0, 2));
+      
+      // 🫧 Clean up translations: remove extra quotes and whitespace
+      const cleanTitle = translation.title?.replace(/^"|"$/g, '').trim() || scene.title;
+      const cleanContent = translation.content?.replace(/^"|"$/g, '').trim() || scene.content;
+      
+      console.log(`[SceneBlock] 🌐 Translation data:`, {
+        originalTitle: scene.title,
+        translatedTitle: cleanTitle,
+        originalContent: scene.content?.substring(0, 50) + '...',
+        translatedContent: cleanContent?.substring(0, 50) + '...',
+        rawTranslationTitle: translation.title,
+        rawTranslationContent: translation.content?.substring(0, 50) + '...',
+        cleanTitleResult: cleanTitle,
+        cleanContentResult: cleanContent?.substring(0, 50) + '...'
+      });
+      
+      console.log(`[SceneBlock] 🔍 DETAILED DEBUG for scene ${scene.id}:`);
+      console.log(`[SceneBlock] 🔍 - Original title: "${scene.title}"`);
+      console.log(`[SceneBlock] 🔍 - Raw translation title: "${translation.title}"`);
+      console.log(`[SceneBlock] 🔍 - Clean title: "${cleanTitle}"`);
+      console.log(`[SceneBlock] 🔍 - Will display: "${cleanTitle}"`);
+      console.log(`[SceneBlock] 🔍 - Original content: "${scene.content?.substring(0, 100)}..."`);
+      console.log(`[SceneBlock] 🔍 - Raw translation content: "${translation.content?.substring(0, 100)}..."`);
+      console.log(`[SceneBlock] 🔍 - Clean content: "${cleanContent?.substring(0, 100)}..."`);
+      console.log(`[SceneBlock] 🔍 - Will display: "${cleanContent?.substring(0, 100)}..."`);
+      console.log(`[SceneBlock] 🔍 - Translation object:`, translation);
+      
       return {
         ...scene,
-        title: translation.title,
-        content: translation.content,
-        beats: translation.beats?.map((beat, index) => ({
-          ...beat,
-          order: index // Preserve correct order for translated beats
-        })) || scene.beats
+        title: cleanTitle,
+        content: cleanContent,
+        beats: translatedBeats
       };
     }
     
@@ -187,6 +243,23 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
   const hoverScaleClass = !isConnectionDragTarget ? 'hover:scale-105' : '';
 
   const outgoingConnections = allConnections.filter(conn => conn.fromSceneId === scene.id);
+
+  // Apply connection translations if available
+  const translatedOutgoingConnections = outgoingConnections.map(connection => {
+    if (currentLanguage === 'en' || !connectionTranslations) {
+      return connection;
+    }
+    const connectionTranslation = connectionTranslations.find(ct => 
+      ct.connectionId === connection.id && ct.language === currentLanguage
+    );
+    if (connectionTranslation) {
+      return {
+        ...connection,
+        label: connectionTranslation.label
+      };
+    }
+    return connection;
+  });
 
   const handleAddNewChoiceToggle = () => {
     setIsAddingNewChoice(!isAddingNewChoice);
@@ -309,10 +382,15 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
             </div>
             {displayScene.beats
               .sort((a, b) => a.order - b.order)
-              .map((beat, index) => (
-                <BeatDisplay
-                  key={beat.id}
-                  beat={beat}
+              .map((beat, index) => {
+                // 🔧 FORCE COMPONENT RECREATION: Include asset IDs in key to force re-render when assets change
+                const componentKey = `${beat.id}_${beat.imageId || 'noimg'}_${beat.videoId || 'novid'}`;
+                console.log(`[SceneBlock] 🔧 BeatDisplay key for beat ${beat.id}: ${componentKey}`);
+                
+                return (
+                  <BeatDisplay
+                    key={componentKey}
+                    beat={beat}
                   isLast={index === displayScene.beats!.length - 1}
                   onImageGenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
                   onImageRegenerate={onGenerateBeatImage ? (beatId) => onGenerateBeatImage(scene.id, beatId) : undefined}
@@ -326,7 +404,8 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
                   }}
                   generatingImage={generatingBeatImageFor?.sceneId === scene.id && generatingBeatImageFor?.beatId === beat.id}
                 />
-              ))
+                );
+              })
             }
           </div>
         ) : (
@@ -672,9 +751,9 @@ const SceneBlock: React.FC<SceneBlockProps> = ({
       
       <div className="p-2 border-t border-slate-600 space-y-2">
         <div className="text-xs text-slate-400 mb-1">Options:</div>
-        {outgoingConnections.length > 0 && (
+        {translatedOutgoingConnections.length > 0 && (
           <ul className="space-y-1.5 max-h-32 overflow-y-auto pr-1 choice-list">
-            {outgoingConnections.map(conn => (
+            {translatedOutgoingConnections.map(conn => (
               <li key={conn.id} className="choice-item flex items-center group bg-slate-600 p-1.5 rounded-md">
                 <EditableText
                   initialValue={conn.label}

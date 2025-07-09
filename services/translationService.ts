@@ -199,7 +199,14 @@ export class TranslationService {
   ): Promise<string> {
     const prompt = type === 'title'
       ? `Translate this title to ${targetLanguageName}: "${text}"`
-      : `Translate to ${targetLanguageName}, preserve speaker tags: ${text}`;
+      : `You are a translator. Translate the following text to ${targetLanguageName}.
+
+IMPORTANT INSTRUCTION: If you translate a character's name, you must translate it consistently throughout the entire text. Preserve speaker tags.
+
+Respond ONLY with the translated text, nothing else.
+
+Text to translate:
+${text}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -230,11 +237,75 @@ export class TranslationService {
   }
 
   private static async translateBeats(beats: Beat[], targetLanguageName: string, apiKey: string): Promise<Beat[]> {
-    const translatedBeats: Beat[] = [];
-    for (const beat of beats) {
-      const translatedText = await this.translateTextWithOpenAI(beat.text, targetLanguageName, apiKey, 'content');
-      translatedBeats.push({ ...beat, text: translatedText });
+    if (beats.length === 0) return [];
+    
+    // Create a single text block with all beats, using separators
+    const beatsText = beats.map((beat, index) => 
+      `BEAT_${index}: ${beat.text}`
+    ).join('\n---\n');
+    
+    const prompt = `Translate all the following story beats to ${targetLanguageName}. 
+    
+IMPORTANT: Se traduzires o nome de um personagem, tens de traduzir em todos os outros beats.
+
+Format your response exactly like this:
+BEAT_0: [translated text for beat 0]
+---
+BEAT_1: [translated text for beat 1]
+---
+BEAT_2: [translated text for beat 2]
+(etc.)
+
+Story beats to translate:
+${beatsText}`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 2000,
+        temperature: 0.1 // Lower temperature for more consistent translations
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
     }
+
+    const data = await response.json();
+    const translatedText = data.choices[0].message.content;
+    
+    // Parse the response back into individual beats
+    const translatedBeats: Beat[] = [];
+    const beatSections = translatedText.split('---').map((section: string) => section.trim());
+    
+    for (let i = 0; i < beats.length; i++) {
+      const beatSection = beatSections[i];
+      if (beatSection) {
+        // Extract the translated text after "BEAT_X: "
+        const beatMatch = beatSection.match(/BEAT_\d+:\s*(.+)/s);
+        const translatedBeatText = beatMatch ? beatMatch[1].trim() : beatSection;
+        
+        translatedBeats.push({
+          ...beats[i],
+          text: translatedBeatText
+        });
+      } else {
+        // Fallback: keep original if parsing fails
+        translatedBeats.push(beats[i]);
+      }
+    }
+    
     return translatedBeats;
   }
 

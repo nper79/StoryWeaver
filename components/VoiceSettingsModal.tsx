@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Modal from './Modal';
-import type { VoiceAssignment, ElevenLabsVoice, NarratorVoiceAssignments, Scene, Translation, Connection } from '../types';
+import type { VoiceAssignment, ElevenLabsVoice, NarratorVoiceAssignments, Scene, Translation, Connection, ConnectionTranslation } from '../types';
 import { fetchAvailableElevenLabsVoices } from '../elevenLabsService';
 import { saveCharacterImage, getImageFromStorage } from '../fileStorageService';
 import LanguageSelector from './LanguageSelector';
@@ -32,6 +32,7 @@ interface SettingsModalProps {
   currentLanguage: string;
   translations: Translation[];
   onSaveTranslations: (translations: Translation[]) => void;
+  onSaveConnectionTranslations: (connectionTranslations: ConnectionTranslation[]) => void;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ 
@@ -60,6 +61,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   currentLanguage,
   translations,
   onSaveTranslations,
+  onSaveConnectionTranslations,
 }) => {
   const [assignments, setAssignments] = useState<VoiceAssignment[]>([]);
   const [availableVoices, setAvailableVoices] = useState<ElevenLabsVoice[]>([]);
@@ -319,8 +321,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       // Save translations using the callback
       onSaveTranslations(updatedTranslations);
       
-      // TODO: Save connection translations - need to add this to App.tsx state
-      console.log('Connection translations:', result.connectionTranslations);
+      // Save connection translations using the callback
+      onSaveConnectionTranslations(result.connectionTranslations);
+      console.log('Connection translations saved:', result.connectionTranslations);
       
       alert(`Translation completed! ${result.translations.length} scene translations and ${result.connectionTranslations.length} connection translations created/updated.`);
       

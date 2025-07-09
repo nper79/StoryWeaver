@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { Scene, Connection, StoryData, VoiceAssignment, Translation, NarratorVoiceAssignments } from './types';
+import type { Scene, Connection, StoryData, VoiceAssignment, Translation, NarratorVoiceAssignments, ConnectionTranslation } from './types';
 import Toolbar from './components/Toolbar';
 import CanvasView from './components/CanvasView';
 import ZoomControls from './components/ZoomControls';
@@ -8,6 +8,7 @@ import VoiceSettingsModal from './components/VoiceSettingsModal';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { TranslationService } from './services/translationService';
 import { generateAudioWithAlignment } from './elevenLabsService';
+import { clearAllAudioCache, getAudioCacheInfo } from './utils/audioCacheUtils';
 
 
 
@@ -63,6 +64,7 @@ const App: React.FC = () => {
   const [narratorVoiceId, setNarratorVoiceId] = useState<string | null>(null);
   const [narratorVoiceAssignments, setNarratorVoiceAssignments] = useState<NarratorVoiceAssignments>({});
   const [translations, setTranslations] = useState<Translation[]>([]);
+  const [connectionTranslations, setConnectionTranslations] = useState<ConnectionTranslation[]>([]);
   const [currentLanguage, setCurrentLanguage] = useState<string>('en');
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState<boolean>(false);
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null);
@@ -87,6 +89,7 @@ const App: React.FC = () => {
     let initialNarratorVoiceId: string | null = null;
     let initialNarratorVoiceAssignments: NarratorVoiceAssignments = {};
     let initialTranslations: Translation[] = [];
+    let initialConnectionTranslations: ConnectionTranslation[] = [];
     let initialCurrentLanguage: string = 'en';
 
     if (savedStory) {
@@ -104,7 +107,14 @@ const App: React.FC = () => {
         initialNarratorVoiceId = parsedStory.narratorVoiceId || null;
         initialNarratorVoiceAssignments = parsedStory.narratorVoiceAssignments || {};
         initialTranslations = parsedStory.translations || [];
+        initialConnectionTranslations = parsedStory.connectionTranslations || [];
         initialCurrentLanguage = parsedStory.currentLanguage || 'en';
+        
+        // Debug logging for connection translations
+        console.log('[DEBUG] Loading from localStorage:');
+        console.log('[DEBUG] - Scene translations:', initialTranslations.length);
+        console.log('[DEBUG] - Connection translations:', initialConnectionTranslations.length);
+        console.log('[DEBUG] - Connection translations data:', initialConnectionTranslations);
         
         // Check if we need to migrate image data from localStorage to IndexedDB
         const scenesMigrationNeeded = initialScenes.some(scene => (scene as any).generatedImageUrl && !scene.generatedImageId);
@@ -231,6 +241,7 @@ const App: React.FC = () => {
     setNarratorVoiceId(initialNarratorVoiceId);
     setNarratorVoiceAssignments(initialNarratorVoiceAssignments);
     setTranslations(initialTranslations);
+    setConnectionTranslations(initialConnectionTranslations);
     setCurrentLanguage(initialCurrentLanguage);
 
     const savedZoom = localStorage.getItem(ZOOM_LEVEL_KEY);
@@ -450,7 +461,17 @@ const App: React.FC = () => {
 
   const handleExportZip = async () => {
     try {
-      const storyData: StoryData = { scenes, connections, startSceneId, voiceAssignments, translations, currentLanguage, narratorVoiceId: narratorVoiceId || undefined, narratorVoiceAssignments };
+      const storyData: StoryData = { 
+        scenes, 
+        connections, 
+        startSceneId, 
+        voiceAssignments, 
+        translations, 
+        connectionTranslations, // 🔧 FIX: Include connectionTranslations in export
+        currentLanguage, 
+        narratorVoiceId: narratorVoiceId || undefined, 
+        narratorVoiceAssignments 
+      };
       
       // Debug: Log what translations are being exported
       console.log('🔍 Exporting translations:', translations);
@@ -484,14 +505,86 @@ const App: React.FC = () => {
       narratorVoiceAssignments: data.narratorVoiceAssignments || {}
     });
     
-    setScenes(data.scenes?.map(s => ({
+    // Debug: Log first scene beats to verify IDs are correct
+    if (data.scenes && data.scenes.length > 0 && data.scenes[0].beats) {
+      console.log('[Load] 🔍 DEBUG - First scene beats from imported data:');
+      data.scenes[0].beats.slice(0, 2).forEach((beat, index) => {
+        console.log(`[Load] Beat ${index + 1}:`, {
+          id: beat.id,
+          imageId: beat.imageId,
+          videoId: beat.videoId
+        });
+      });
+    }
+    
+    const processedScenes = data.scenes?.map(s => ({
       ...s, 
       generatedImagePrompt: s.generatedImagePrompt || undefined,
       detectedCharacters: s.detectedCharacters || undefined,
       settingContext: s.settingContext || undefined,
       generatedImageId: s.generatedImageId || undefined,
-    })) || []); 
-    setConnections(data.connections || []);
+      beats: s.beats || [] // Explicitly preserve beats
+    })) || [];
+    
+    // Debug: Log processed scenes to verify beats are preserved
+    if (processedScenes.length > 0 && processedScenes[0].beats) {
+      console.log('[Load] 🔍 DEBUG - First scene beats after processing:');
+      processedScenes[0].beats.slice(0, 2).forEach((beat, index) => {
+        console.log(`[Load] Processed Beat ${index + 1}:`, {
+          id: beat.id,
+          imageId: beat.imageId,
+          videoId: beat.videoId
+        });
+      });
+    }
+    
+    console.log('[Load] 🔧 Setting scenes state with', processedScenes.length, 'scenes');
+    if (processedScenes.length > 0 && processedScenes[0].beats) {
+      console.log('[Load] 🔧 First scene beats being set to state:', processedScenes[0].beats.slice(0, 2).map(b => ({
+        id: b.id,
+        imageId: b.imageId,
+        videoId: b.videoId
+      })));
+      
+      // 🔍 CRITICAL DEBUG: Check if beats have updated asset IDs
+      console.log('[Load] 🔍 BEATS ASSET IDS DEBUG:');
+      processedScenes[0].beats.slice(0, 4).forEach((beat, index) => {
+        console.log(`[Load] 🔍 Beat ${index + 1} (${beat.id}):`);
+        console.log(`[Load] 🔍   - imageId: ${beat.imageId}`);
+        console.log(`[Load] 🔍   - videoId: ${beat.videoId}`);
+        console.log(`[Load] 🔍   - imageId starts with img_1752057: ${beat.imageId?.startsWith('img_1752057')}`);
+        console.log(`[Load] 🔍   - videoId starts with vid_1752057: ${beat.videoId?.startsWith('vid_1752057')}`);
+      });
+    }
+    
+    // Force React to detect changes by creating completely new objects
+    const forceUpdatedScenes = processedScenes.map(scene => ({
+      ...scene,
+      beats: scene.beats ? scene.beats.map(beat => ({ ...beat })) : undefined
+    }));
+    
+    console.log('[Load] 🔧 Forcing complete state update...');
+    setScenes(forceUpdatedScenes); 
+    setConnections(data.connections ? [...data.connections] : []);
+    
+    // Force multiple re-renders to ensure state propagation
+    console.log('[Load] 🔧 Forcing re-render sequence...');
+    setActiveSceneId(null);
+    
+    // Use multiple timeouts to force React to update
+    setTimeout(() => {
+      console.log('[Load] 🔧 First re-render complete');
+      setActiveSceneId(null);
+    }, 50);
+    
+    setTimeout(() => {
+      console.log('[Load] 🔧 Second re-render complete');
+      setActiveSceneId(null);
+    }, 100);
+    
+    setTimeout(() => {
+      console.log('[Load] 🔧 Final re-render complete - state should be updated now');
+    }, 200);
     setStartSceneId(data.startSceneId || null);
     setVoiceAssignments(data.voiceAssignments || []);
     
@@ -502,6 +595,15 @@ const App: React.FC = () => {
     } else {
       console.log('[Load] No translations found, clearing existing translations');
       setTranslations([]);
+    }
+    
+    // Process imported connection translations
+    if (data.connectionTranslations && data.connectionTranslations.length > 0) {
+      console.log('[Load] Setting connection translations:', data.connectionTranslations.length);
+      setConnectionTranslations(data.connectionTranslations);
+    } else {
+      console.log('[Load] No connection translations found, clearing existing connection translations');
+      setConnectionTranslations([]);
     }
     
     if (data.currentLanguage && data.currentLanguage !== 'en') {
@@ -2198,6 +2300,28 @@ const App: React.FC = () => {
     return parts.length > 0 ? parts : [{ text, speaker: 'Narrator' }];
   };
 
+  // Audio cache management
+  const handleClearAudio = useCallback(() => {
+    try {
+      const cacheInfo = getAudioCacheInfo();
+      
+      if (cacheInfo.count === 0) {
+        alert('No audio files found in cache.');
+        return;
+      }
+      
+      const confirmMessage = `This will clear ${cacheInfo.count} audio files from cache.\n\nEstimated space to be freed: ${(cacheInfo.estimatedSize / 1024 / 1024).toFixed(2)} MB\n\nAre you sure?`;
+      
+      if (confirm(confirmMessage)) {
+        clearAllAudioCache();
+        alert(`Successfully cleared ${cacheInfo.count} audio files from cache!`);
+      }
+    } catch (error) {
+      console.error('Error clearing audio cache:', error);
+      alert('Error clearing audio cache. Check console for details.');
+    }
+  }, []);
+
   // Translation management functions
   const handleAddTranslation = (translation: Translation) => {
     setTranslations(prev => {
@@ -2222,8 +2346,15 @@ const App: React.FC = () => {
     startSceneId, 
     voiceAssignments,
     translations,
+    connectionTranslations,
     currentLanguage
   };
+  
+  // Debug logging for connection translations in storyData
+  console.log('[DEBUG] StoryData created with:');
+  console.log('[DEBUG] - Scene translations:', translations.length);
+  console.log('[DEBUG] - Connection translations:', connectionTranslations.length);
+  console.log('[DEBUG] - Connection translations data:', connectionTranslations);
 
   return (
       <div className="flex flex-col h-screen bg-slate-900">
@@ -2245,6 +2376,7 @@ const App: React.FC = () => {
           onOpenSettings={() => setIsVoiceSettingsOpen(true)}
           onDownloadAllAudio={handleDownloadAllAudio}
           isDownloadingAudio={isDownloadingAudio}
+          onClearAudio={handleClearAudio}
           currentLanguage={currentLanguage}
           translations={translations}
           onLanguageChange={setCurrentLanguage}
@@ -2256,6 +2388,7 @@ const App: React.FC = () => {
             onDeleteScene={deleteScene}
             onAddConnection={addConnection}
             onDeleteConnection={deleteConnection}
+            onAddInlineChoice={handleAddInlineChoice}
             setActiveSceneId={setActiveSceneId}
             activeSceneId={activeSceneId}
             zoomLevel={zoomLevel}
@@ -2293,6 +2426,7 @@ const App: React.FC = () => {
               narratorVoiceAssignments={narratorVoiceAssignments}
               currentLanguage={currentLanguage}
               translations={translations}
+              connectionTranslations={connectionTranslations}
             />
           )}
           
@@ -2322,6 +2456,7 @@ const App: React.FC = () => {
             currentLanguage={currentLanguage}
             translations={translations}
             onSaveTranslations={setTranslations}
+            onSaveConnectionTranslations={setConnectionTranslations}
           />
         </div>
       </div>

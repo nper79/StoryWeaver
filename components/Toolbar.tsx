@@ -19,6 +19,7 @@ interface ToolbarProps {
   bulkImageProgress: number;
   onDownloadAllAudio?: () => void; // New prop for audio download
   isDownloadingAudio?: boolean; // New prop for audio download loading state
+  onClearAudio?: () => void; // New prop for clearing audio cache
   currentLanguage: string; // Current selected language
   translations: Translation[]; // Available translations
   onLanguageChange: (language: string) => void; // Callback when language changes
@@ -42,6 +43,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   bulkImageProgress,
   onDownloadAllAudio,
   isDownloadingAudio,
+  onClearAudio,
   currentLanguage,
   translations,
   onLanguageChange,
@@ -254,6 +256,18 @@ const Toolbar: React.FC<ToolbarProps> = ({
               </>
             )}
           </button>
+          {onClearAudio && (
+            <button 
+              onClick={onClearAudio}
+              className="px-3 py-2 text-sm font-medium rounded-md transition-colors flex items-center space-x-2 bg-red-600 hover:bg-red-500 text-white"
+              title="Clear all cached audio files"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              <span>Clear Audio</span>
+            </button>
+          )}
         </div>
       )}
       

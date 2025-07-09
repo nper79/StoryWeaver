@@ -344,6 +344,7 @@ const CanvasView: React.FC<CanvasViewProps> = ({
             generatingBeatImageFor={generatingBeatImageFor} // Pass new prop
             currentLanguage={currentLanguage} // Pass translation props
             translations={translations} // Pass translation props
+            connectionTranslations={storyData.connectionTranslations} // Pass connection translations
           />
         ))}
       </div>

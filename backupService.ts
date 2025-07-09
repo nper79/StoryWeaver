@@ -130,6 +130,26 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
       throw new Error('No story data to export');
     }
 
+    // 🔍 DEBUG: Check what translations are being passed to export
+    console.log('🔍 [Export] DEBUG - StoryData received:');
+    console.log('🔍 [Export] - Scenes count:', storyData.scenes?.length || 0);
+    console.log('🔍 [Export] - Connections count:', storyData.connections?.length || 0);
+    console.log('🔍 [Export] - Translations count:', storyData.translations?.length || 0);
+    console.log('🔍 [Export] - Connection translations count:', storyData.connectionTranslations?.length || 0);
+    console.log('🔍 [Export] - Current language:', storyData.currentLanguage);
+    
+    if (storyData.translations && storyData.translations.length > 0) {
+      console.log('🔍 [Export] - Translation languages:', [...new Set(storyData.translations.map(t => t.language))]);
+    } else {
+      console.log('🔍 [Export] - ❌ NO TRANSLATIONS FOUND IN STORY DATA!');
+    }
+    
+    if (storyData.connectionTranslations && storyData.connectionTranslations.length > 0) {
+      console.log('🔍 [Export] - Connection translation languages:', [...new Set(storyData.connectionTranslations.map(ct => ct.language))]);
+    } else {
+      console.log('🔍 [Export] - ❌ NO CONNECTION TRANSLATIONS FOUND IN STORY DATA!');
+    }
+
     const zip = new JSZip();
 
     // Create the backup data structure
@@ -160,24 +180,31 @@ export async function exportStoryToZip(storyData: StoryData): Promise<void> {
       Object.entries(translationsByLanguage).forEach(([language, translations]) => {
         const languageFolder = zip.folder(language);
         
-        // Create translated story data for this language
+        // Create language-specific story data
         const translatedStoryData = {
           ...storyData,
           scenes: storyData.scenes.map(scene => {
-            const sceneTranslation = translations.find(t => t.sceneId === scene.id);
-            if (sceneTranslation) {
+            const translation = storyData.translations?.find(
+              t => t.sceneId === scene.id && t.language === language
+            );
+            if (translation) {
               return {
                 ...scene,
-                title: sceneTranslation.title,
-                content: sceneTranslation.content,
-                beats: sceneTranslation.beats ? sceneTranslation.beats.map((beat, index) => ({
+                title: translation.title,
+                content: translation.content,
+                beats: translation.beats ? translation.beats.map((beat, index) => ({
                   ...beat,
                   order: (beat as any).order ?? index
                 } as Beat)) : scene.beats
               };
             }
             return scene;
-          })
+          }),
+          connections: storyData.connections.map(connection => connection),
+          // Include connection translations in the language-specific data
+          connectionTranslations: storyData.connectionTranslations?.filter(
+            ct => ct.language === language
+          ) || []
         };
         
         const translatedBackupData: StoryBackup = {
@@ -388,27 +415,41 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
     // Generate new IDs to avoid conflicts
     const oldToNewImageIds = new Map<string, string>();
     const oldToNewVideoIds = new Map<string, string>();
+    const oldToNewConnectionIds = new Map<string, string>();
 
     // Import images
     const imagesFolder = zipContent.folder('images');
     if (imagesFolder) {
       const imageFiles = Object.keys(imagesFolder.files).filter(name => 
-        name.startsWith('images/') && !name.endsWith('/')
+        name.startsWith('images/') && !name.endsWith('/') && 
+        (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif') || name.endsWith('.webp'))
       );
+      
+      console.log(`[Import] Found ${imageFiles.length} image files:`, imageFiles);
 
       for (const imagePath of imageFiles) {
         const imageFile = zipContent.file(imagePath);
         if (imageFile) {
           const imageBlob = await imageFile.async('blob');
-          const oldImageId = imagePath.split('/')[1].split('.')[0]; // Extract ID from filename
+          // Extract ID from filename more robustly
+          const filename = imagePath.split('/')[1]; // Get filename after 'images/'
+          const oldImageId = filename.split('.')[0]; // Remove extension
           const newImageId = `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          
+          console.log(`[Import] Processing image: ${imagePath}`);
+          console.log(`[Import] - Old ID: ${oldImageId}`);
+          console.log(`[Import] - New ID: ${newImageId}`);
           
           // Store image in IndexedDB with new ID
           await saveImageBlobToStorage(newImageId, imageBlob);
           oldToNewImageIds.set(oldImageId, newImageId);
+          
+          console.log(`[Import] ✅ Image imported successfully: ${oldImageId} -> ${newImageId}`);
         }
       }
     }
+    
+    console.log(`[Import] Image ID mapping:`, Object.fromEntries(oldToNewImageIds));
 
     // Import videos - Use direct file enumeration
     console.log(`[Import] Searching for video files in ZIP...`);
@@ -423,7 +464,9 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
       const videoFile = zipContent.file(videoPath);
       if (videoFile) {
         const videoBlob = await videoFile.async('blob');
-        const oldVideoId = videoPath.split('/')[1].split('.')[0]; // Extract ID from filename
+        // Extract ID from filename more robustly
+        const filename = videoPath.split('/')[1]; // Get filename after 'videos/'
+        const oldVideoId = filename.split('.')[0]; // Remove extension
         const newVideoId = `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
         // Fix MIME type if missing
@@ -598,31 +641,62 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
           const oldVideoId = beat.videoId;
           const oldImageId = beat.imageId;
           
-          const newImageId = beat.imageId && oldToNewImageIds.has(beat.imageId)
-            ? oldToNewImageIds.get(beat.imageId)
-            : beat.imageId;
-            
-          const newVideoId = beat.videoId && oldToNewVideoIds.has(beat.videoId)
-            ? oldToNewVideoIds.get(beat.videoId)
-            : beat.videoId;
-          
-          console.log(`[Import] Beat ${beatIndex + 1}:`, {
-            oldImageId,
-            newImageId,
-            oldVideoId,
-            newVideoId,
-            hasVideoMapping: oldVideoId ? oldToNewVideoIds.has(oldVideoId) : false
+          console.log(`[Import] 🔍 Processing Beat ${beatIndex + 1}:`, {
+            beatId: beat.id,
+            originalImageId: oldImageId,
+            originalVideoId: oldVideoId
           });
           
-          return {
+          // Map image ID if it exists and has a mapping
+          let newImageId = beat.imageId;
+          if (beat.imageId && oldToNewImageIds.has(beat.imageId)) {
+            newImageId = oldToNewImageIds.get(beat.imageId)!;
+            console.log(`[Import] ✅ Beat ${beatIndex + 1} image mapping: ${beat.imageId} -> ${newImageId}`);
+          } else if (beat.imageId) {
+            console.log(`[Import] ❌ Beat ${beatIndex + 1} image ID not found in mapping: ${beat.imageId}`);
+            console.log(`[Import] Available image mappings:`, Array.from(oldToNewImageIds.keys()));
+            // Keep original ID if no mapping found
+            newImageId = beat.imageId;
+          }
+          
+          // Map video ID if it exists and has a mapping
+          let newVideoId = beat.videoId;
+          if (beat.videoId && oldToNewVideoIds.has(beat.videoId)) {
+            newVideoId = oldToNewVideoIds.get(beat.videoId)!;
+            console.log(`[Import] ✅ Beat ${beatIndex + 1} video mapping: ${beat.videoId} -> ${newVideoId}`);
+          } else if (beat.videoId) {
+            console.log(`[Import] ❌ Beat ${beatIndex + 1} video ID not found in mapping: ${beat.videoId}`);
+            console.log(`[Import] Available video mappings:`, Array.from(oldToNewVideoIds.keys()));
+            // Keep original ID if no mapping found
+            newVideoId = beat.videoId;
+          }
+          
+          const updatedBeat = {
             ...beat,
             imageId: newImageId,
             videoId: newVideoId
           };
+          
+          console.log(`[Import] 📋 Beat ${beatIndex + 1} final result:`, {
+            beatId: beat.id,
+            originalImageId: oldImageId,
+            finalImageId: newImageId,
+            originalVideoId: oldVideoId,
+            finalVideoId: newVideoId,
+            imageWasMapped: oldImageId !== newImageId,
+            videoWasMapped: oldVideoId !== newVideoId,
+            updatedBeat: {
+              id: updatedBeat.id,
+              imageId: updatedBeat.imageId,
+              videoId: updatedBeat.videoId
+            }
+          });
+          
+          return updatedBeat;
         });
       }
       
-      return {
+      const finalScene = {
         ...scene,
         id: newSceneId,
         generatedImageId: scene.generatedImageId && oldToNewImageIds.has(scene.generatedImageId)
@@ -630,15 +704,29 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
           : scene.generatedImageId,
         beats: updatedBeats
       };
+      
+      console.log(`[Import] 📝 Final scene "${scene.title}" created:`, {
+        sceneId: finalScene.id,
+        beatsCount: finalScene.beats?.length || 0,
+        firstBeatImageId: finalScene.beats?.[0]?.imageId,
+        firstBeatVideoId: finalScene.beats?.[0]?.videoId
+      });
+      
+      return finalScene;
     });
 
-    // Update connections with new scene IDs
-    updatedStory.connections = updatedStory.connections.map(conn => ({
-      ...conn,
-      id: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      fromSceneId: oldToNewSceneIds.get(conn.fromSceneId) || conn.fromSceneId,
-      toSceneId: oldToNewSceneIds.get(conn.toSceneId) || conn.toSceneId
-    }));
+    // Update connections with new scene IDs and populate connection ID mapping
+    updatedStory.connections = updatedStory.connections.map(conn => {
+      const newConnectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      oldToNewConnectionIds.set(conn.id, newConnectionId);
+      
+      return {
+        ...conn,
+        id: newConnectionId,
+        fromSceneId: oldToNewSceneIds.get(conn.fromSceneId) || conn.fromSceneId,
+        toSceneId: oldToNewSceneIds.get(conn.toSceneId) || conn.toSceneId
+      };
+    });
 
     // Update start scene ID
     if (updatedStory.startSceneId && oldToNewSceneIds.has(updatedStory.startSceneId)) {
@@ -732,6 +820,7 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
 
     // Process translations from language folders
     const translations: Translation[] = [];
+    const connectionTranslations: any[] = [];
     let detectedLanguage = 'en';
     
     // Check for language folders (es, pt, ja, etc.)
@@ -767,15 +856,32 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
                   content: translatedScene.content,
                   beats: translatedScene.beats || [],
                   createdAt: new Date().toISOString(),
-                  version: '1.0'
+                  version: 1.0
                 });
               }
             });
-            
-            // Set the detected language (use the first non-English language found)
-            if (language !== 'en' && detectedLanguage === 'en') {
-              detectedLanguage = language;
-            }
+          }
+          
+          // Extract connection translations from the language-specific data
+          if (langBackupData.story && langBackupData.story.connectionTranslations) {
+            langBackupData.story.connectionTranslations.forEach((connTranslation: any) => {
+              // Map old connection ID to new connection ID
+              const newConnectionId = oldToNewConnectionIds.get(connTranslation.connectionId) || connTranslation.connectionId;
+              
+              connectionTranslations.push({
+                id: `conn_trans_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                connectionId: newConnectionId,
+                language: language,
+                label: connTranslation.label
+              });
+              
+              console.log(`[Import] Found connection translation: ${connTranslation.connectionId} -> ${connTranslation.label} (${language})`);
+            });
+          }
+          
+          // Set the detected language (use the first non-English language found)
+          if (language !== 'en' && detectedLanguage === 'en') {
+            detectedLanguage = language;
           }
         } catch (error) {
           console.error(`[Import] Failed to process language ${language}:`, error);
@@ -786,12 +892,39 @@ export async function importStoryFromZip(file: File): Promise<StoryData> {
     console.log(`[Import] Processed ${translations.length} translations for ${detectedLanguage}`);
     
     // Add translations and language info to the story data
+    console.log(`[Import] 🔧 Creating final story data object...`);
+    console.log(`[Import] - updatedStory scenes count: ${updatedStory.scenes.length}`);
+    console.log(`[Import] - First scene beats:`, updatedStory.scenes[0]?.beats?.slice(0, 2).map(b => ({ id: b.id, imageId: b.imageId, videoId: b.videoId })));
+    
     const finalStoryData = {
       ...updatedStory,
       translations,
+      connectionTranslations,
       currentLanguage: detectedLanguage,
       narratorVoiceAssignments: backupData.story.narratorVoiceAssignments || {}
     };
+    
+    console.log(`[Import] 🔧 Final story data created!`);
+    console.log(`[Import] - finalStoryData scenes count: ${finalStoryData.scenes.length}`);
+    console.log(`[Import] - First scene beats after final creation:`, finalStoryData.scenes[0]?.beats?.slice(0, 2).map(b => ({ id: b.id, imageId: b.imageId, videoId: b.videoId })));
+    
+    console.log(`[Import] Imported ${translations.length} scene translations and ${connectionTranslations.length} connection translations`);
+    
+    // Log final story data for debugging
+    console.log(`[Import] 🚀 FINAL STORY DATA SUMMARY:`);
+    console.log(`[Import] - Total scenes: ${finalStoryData.scenes.length}`);
+    finalStoryData.scenes.forEach((scene, index) => {
+      if (scene.beats && scene.beats.length > 0) {
+        console.log(`[Import] - Scene ${index + 1} "${scene.title}":`, {
+          sceneId: scene.id,
+          beatsCount: scene.beats.length,
+          firstBeatIds: {
+            imageId: scene.beats[0]?.imageId,
+            videoId: scene.beats[0]?.videoId
+          }
+        });
+      }
+    });
     
     console.log('Story imported successfully with translations');
     return finalStoryData;

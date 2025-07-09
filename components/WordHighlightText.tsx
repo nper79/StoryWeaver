@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import WordTooltip from './WordTooltip';
 
 interface WordTimestamp {
   word: string;
@@ -28,6 +29,18 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
   const [words, setWords] = useState<string[]>([]);
   const [currentWordIndex, setCurrentWordIndex] = useState<number>(-1);
   const [isAutoProgressing, setIsAutoProgressing] = useState(false);
+  
+  // Translation tooltip states
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [tooltipWord, setTooltipWord] = useState('');
+
+  // Close tooltip when text changes (slide change)
+  useEffect(() => {
+    if (tooltipVisible) {
+      console.log('📖 [WordHighlightText] Text changed, closing tooltip');
+      setTooltipVisible(false);
+    }
+  }, [text]);
 
   // Debug logging
   console.log('🎯 [WordHighlightText] Render:', {
@@ -81,8 +94,6 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
     
     // Predictive compensation - anticipate highlighting by this amount
     const PREDICTION_OFFSET_MS = 75; // Anticipate by 75ms for smoother perception
-    const CALIBRATION_SAMPLES = 10;
-    let latencyMeasurements: number[] = [];
     
     const updateWordHighlight = (timestamp: number) => {
       // Initialize timing references
@@ -215,12 +226,29 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
     }
   }, [isPlaying, currentWordIndex]);
 
+  // Handle word click for translation
+  const handleWordClick = (word: string, event: React.MouseEvent) => {
+    console.log('🖱️ [WordClick] Word clicked:', word);
+    event.stopPropagation();
+    event.preventDefault();
+    
+    // Clean word but preserve accents and special characters
+    const cleanWord = word.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+    console.log('🧹 [WordClick] Cleaned word (preserving accents):', cleanWord);
+    
+    if (cleanWord.length === 0) return;
+    
+    setTooltipWord(cleanWord);
+    setTooltipVisible(true);
+    
+    console.log('✅ [WordClick] Tooltip should be visible now');
+  };
+
   // Render text with word highlighting
   const renderHighlightedText = () => {
-    console.log(' [WordHighlight] Rendering text, words:', words.length);
+    console.log('🎯 [WordHighlight] Rendering text, words:', words.length);
     
     if (words.length === 0) {
-      console.log(' [WordHighlight] No words, showing plain text');
       console.log('🎯 [WordHighlight] No words, showing plain text');
       return <span style={{ color: 'white' }}>{text}</span>;
     }
@@ -231,7 +259,6 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
       <span>
         {words.map((word, index) => {
           const isCurrentWord = index === currentWordIndex;
-          const isPast = index < currentWordIndex && currentWordIndex >= 0;
           
           const wordStyle = isCurrentWord 
             ? { 
@@ -242,11 +269,21 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
           return (
             <span
               key={index}
+              onClick={(e) => handleWordClick(word, e)}
               style={{
                 ...wordStyle,
                 display: 'inline-block',
-                marginRight: '0.25rem',
-                transition: 'all 0.2s ease-in-out'
+                transition: 'all 0.2s ease-in-out',
+                cursor: 'pointer',
+                padding: '1px 2px',
+                borderRadius: '2px',
+                whiteSpace: 'nowrap'
+              }}
+              onMouseEnter={(e) => {
+                (e.target as HTMLElement).style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              }}
+              onMouseLeave={(e) => {
+                (e.target as HTMLElement).style.backgroundColor = 'transparent';
               }}
             >
               {word}
@@ -264,9 +301,23 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
           {speaker}
         </div>
       )}
-      <div style={{ color: 'white', fontSize: '18px', lineHeight: '1.6' }}>
+      <div style={{ 
+        color: 'white', 
+        fontSize: '18px', 
+        lineHeight: '1.6',
+        wordWrap: 'break-word',
+        overflowWrap: 'break-word',
+        whiteSpace: 'pre-wrap'
+      }}>
         {renderHighlightedText()}
       </div>
+      
+      {/* Translation tooltip */}
+      <WordTooltip
+        word={tooltipWord}
+        isVisible={tooltipVisible}
+        onClose={() => setTooltipVisible(false)}
+      />
     </div>
   );
 };

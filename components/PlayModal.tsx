@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { StoryData, Scene, Connection, VoiceAssignment, Beat, Translation } from '../types'; 
+import type { StoryData, Scene, Connection, VoiceAssignment, Beat, Translation, ConnectionTranslation } from '../types'; 
 import { generateAudioWithAlignment } from '../elevenLabsService';
 import { getImageFromStorage } from '../fileStorageService';
 import WordHighlightText from './WordHighlightText';
@@ -14,6 +14,7 @@ interface PlayModalProps {
   narratorVoiceAssignments: { [language: string]: string };
   currentLanguage: string;
   translations: Translation[];
+  connectionTranslations?: ConnectionTranslation[];
 }
 
 interface ContentLine {
@@ -53,7 +54,8 @@ const PlayModal: React.FC<PlayModalProps> = ({
   narratorVoiceId,
   narratorVoiceAssignments,
   currentLanguage,
-  translations
+  translations,
+  connectionTranslations
 }) => {
   console.log(`🎙️ [PLAYMODAL] Received narratorVoiceId: ${narratorVoiceId || 'null/undefined'}`);
   const [currentSceneId, setCurrentSceneId] = useState<string | null>(initialSceneId);
@@ -73,6 +75,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
   const [audioDuration, setAudioDuration] = useState<number>(0);
   const [isAudioPlaying, setIsAudioPlaying] = useState<boolean>(false);
   const [audioSource, setAudioSource] = useState<'zip' | 'api' | null>(null);
+  const [isTransitioning, setIsTransitioning] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const characterProfileMap = useRef<Map<string, CharacterProfile>>(new Map());
@@ -118,6 +121,60 @@ const PlayModal: React.FC<PlayModalProps> = ({
     
     console.log(`🌍 [TRANSLATION] No translation found, using original scene`);
     return scene; // Fallback to original if no translation found
+  };
+
+  // Function to get translated connection label
+  const getTranslatedConnection = (connection: Connection): string => {
+    console.log(`🌍 [CONNECTION TRANSLATION] Getting translated connection for language: ${currentLanguage}`);
+    console.log(`🌍 [CONNECTION TRANSLATION] Connection ID: ${connection.id}`);
+    console.log(`🌍 [CONNECTION TRANSLATION] Connection original label: "${connection.label}"`);
+    console.log(`🌍 [CONNECTION TRANSLATION] Available connection translations:`, connectionTranslations?.length || 0);
+    
+    if (currentLanguage === 'en') {
+      console.log(`🌍 [CONNECTION TRANSLATION] Using original English label`);
+      return connection.label; // Return original label for English
+    }
+    
+    if (!connectionTranslations || connectionTranslations.length === 0) {
+      console.log(`🌍 [CONNECTION TRANSLATION] No connection translations available, using original label`);
+      return connection.label;
+    }
+    
+    // Log all available connection translations for debugging
+    console.log(`🌍 [CONNECTION TRANSLATION] All available translations:`);
+    connectionTranslations.forEach((ct, index) => {
+      console.log(`  ${index + 1}. ID: ${ct.connectionId}, Language: ${ct.language}, Label: "${ct.label}"`);
+    });
+    
+    // Find translation for current connection and language
+    const translation = connectionTranslations.find(t => 
+      t.connectionId === connection.id && t.language === currentLanguage
+    );
+    
+    console.log(`🌍 [CONNECTION TRANSLATION] Found translation:`, !!translation);
+    if (translation) {
+      console.log(`🌍 [CONNECTION TRANSLATION] Raw translated label: "${translation.label}"`);
+      // Remove nested quotes if they exist (e.g., ""Este camino"" -> "Este camino")
+      let cleanLabel = translation.label;
+      
+      // Remove outer quotes if the entire string is wrapped in quotes
+      if (cleanLabel.startsWith('"') && cleanLabel.endsWith('"')) {
+        cleanLabel = cleanLabel.slice(1, -1);
+        console.log(`🌍 [CONNECTION TRANSLATION] Removed outer quotes: "${cleanLabel}"`);
+      }
+      
+      // Remove any remaining nested quotes
+      if (cleanLabel.startsWith('"') && cleanLabel.endsWith('"')) {
+        cleanLabel = cleanLabel.slice(1, -1);
+        console.log(`🌍 [CONNECTION TRANSLATION] Removed nested quotes: "${cleanLabel}"`);
+      }
+      
+      console.log(`🌍 [CONNECTION TRANSLATION] Final cleaned label: "${cleanLabel}"`);
+      return cleanLabel;
+    }
+    
+    console.log(`🌍 [CONNECTION TRANSLATION] No translation found, using original label`);
+    return connection.label; // Fallback to original if no translation found
   };
 
   const cleanupAudio = useCallback(() => {
@@ -520,36 +577,123 @@ const PlayModal: React.FC<PlayModalProps> = ({
       setChoices([]);
       setShowChoices(currentSceneId ? true : false); 
     }
+    // Get outgoing connections for this scene
     const outgoingConnections = translatedScene ? story.connections.filter(c => c.fromSceneId === translatedScene.id) : [];
-    setChoices(outgoingConnections);
+    
+    // Apply connection translations if available
+    console.log(`🔍 [CONNECTION DEBUG] Applying translations:`);
+    console.log(`🔍 [CONNECTION DEBUG] - Current language: ${currentLanguage}`);
+    console.log(`🔍 [CONNECTION DEBUG] - Outgoing connections:`, outgoingConnections.length);
+    console.log(`🔍 [CONNECTION DEBUG] - Connection translations available:`, !!story.connectionTranslations);
+    console.log(`🔍 [CONNECTION DEBUG] - Connection translations count:`, story.connectionTranslations?.length || 0);
+    
+    const translatedConnections = outgoingConnections.map(connection => {
+      console.log(`🔍 [CONNECTION DEBUG] Processing connection: "${connection.label}" (ID: ${connection.id})`);
+      
+      // Skip translation for English or if no translations available
+      if (currentLanguage === 'en' || !story.connectionTranslations) {
+        console.log(`🔍 [CONNECTION DEBUG] Skipping translation - Language: ${currentLanguage}, Translations available: ${!!story.connectionTranslations}`);
+        return connection;
+      }
+      
+      // Find translation for this connection and language
+      const connectionTranslation = story.connectionTranslations.find(ct => 
+        ct.connectionId === connection.id && ct.language === currentLanguage
+      );
+      
+      // Return connection with translated label if available
+      if (connectionTranslation) {
+        console.log(`🌍 [CONNECTION TRANSLATION] Translating "${connection.label}" to "${connectionTranslation.label}"`);
+        return {
+          ...connection,
+          label: connectionTranslation.label
+        };
+      }
+      
+      console.log(`🌍 [CONNECTION TRANSLATION] No translation found for connection "${connection.label}" in ${currentLanguage}`);
+      return connection;
+    });
+    
+    setChoices(translatedConnections);
 
-  }, [currentSceneId, story.scenes, story.connections, isOpen]);
+  }, [currentSceneId, story.scenes, story.connections, story.connectionTranslations, currentLanguage, isOpen]);
 
   // Effect to load the correct media (image/video for beat or image for scene)
   useEffect(() => {
     let isActive = true;
 
     const loadMedia = async () => {
+      console.log('🖼️ [MEDIA LOADER] Starting media load...', {
+        inBeatMode: currentBeats.length > 0,
+        currentBeatIndex,
+        currentBeats: currentBeats.length,
+        currentScene: currentScene?.id,
+        isTransitioning
+      });
+      
       // If in beat mode, load beat media (video takes priority over image)
       if (currentBeats.length > 0) {
         const beat = currentBeats[currentBeatIndex];
+        console.log('🎬 [BEAT MEDIA] Loading beat media:', {
+          beatId: beat?.id,
+          videoId: beat?.videoId,
+          imageId: beat?.imageId
+        });
         
         // Check for video first
         if (beat?.videoId) {
+          console.log('🎥 [VIDEO] Loading video:', beat.videoId);
           const videoUrl = await getImageFromStorage(beat.videoId); // Reuse storage system
-          if (isActive) {
-            setCurrentVideoUrl(videoUrl || undefined);
+          console.log('🎥 [VIDEO] Video loaded:', !!videoUrl);
+          
+          if (videoUrl) {
+            console.log('🎥 [VIDEO] Video URL details:', {
+              url: videoUrl.substring(0, 50) + '...',
+              length: videoUrl.length,
+              type: videoUrl.split(';')[0],
+              isDataUrl: videoUrl.startsWith('data:')
+            });
+          }
+          
+          if (isActive && videoUrl) {
+            console.log('🎥 [VIDEO] Setting video URL for display');
+            setCurrentVideoUrl(videoUrl);
             setCurrentImageUrl(undefined); // Clear image when video is present
+          } else if (isActive && !videoUrl) {
+            // Video ID exists but not found in storage - try image fallback
+            console.log('⚠️ [VIDEO] Video not found in storage, trying image fallback');
+            console.log('⚠️ [VIDEO] Video ID that failed:', beat.videoId);
+            if (beat?.imageId) {
+              const imageUrl = await getImageFromStorage(beat.imageId);
+              console.log('🖼️ [IMAGE] Fallback image loaded:', !!imageUrl);
+              if (imageUrl) {
+                setCurrentImageUrl(imageUrl);
+                setCurrentVideoUrl(undefined);
+              } else {
+                setCurrentImageUrl(undefined);
+                setCurrentVideoUrl(undefined);
+              }
+            } else {
+              console.log('⚠️ [VIDEO] No image fallback available');
+              setCurrentImageUrl(undefined);
+              setCurrentVideoUrl(undefined);
+            }
           }
         }
         // Fall back to image if no video
         else if (beat?.imageId) {
+          console.log('🖼️ [IMAGE] Loading beat image:', beat.imageId);
           const imageUrl = await getImageFromStorage(beat.imageId);
-          if (isActive) {
-            setCurrentImageUrl(imageUrl || undefined);
+          console.log('🖼️ [IMAGE] Beat image loaded:', !!imageUrl);
+          if (isActive && imageUrl) {
+            setCurrentImageUrl(imageUrl);
             setCurrentVideoUrl(undefined); // Clear video when image is present
+          } else if (isActive) {
+            setCurrentImageUrl(undefined);
+            setCurrentVideoUrl(undefined);
           }
         } else {
+          console.log('⚪ [MEDIA] No media for beat');
           if (isActive) {
             setCurrentImageUrl(undefined);
             setCurrentVideoUrl(undefined);
@@ -558,17 +702,25 @@ const PlayModal: React.FC<PlayModalProps> = ({
       } 
       // If in regular scene mode, load scene image
       else if (currentScene?.generatedImageId) {
+        console.log('🖼️ [SCENE] Loading scene image:', currentScene.generatedImageId);
         const url = await getImageFromStorage(currentScene.generatedImageId);
+        console.log('🖼️ [SCENE] Scene image loaded:', !!url);
         if (isActive) {
           setCurrentImageUrl(url || undefined);
           setCurrentVideoUrl(undefined); // Clear video in scene mode
         }
       } else {
+        console.log('⚪ [MEDIA] No scene image');
         if (isActive) {
           setCurrentImageUrl(undefined);
           setCurrentVideoUrl(undefined);
         }
       }
+      
+      console.log('🖼️ [MEDIA RESULT] Final media state:', {
+        currentImageUrl: !!currentImageUrl,
+        currentVideoUrl: !!currentVideoUrl
+      });
     };
 
     if (isOpen) {
@@ -576,7 +728,85 @@ const PlayModal: React.FC<PlayModalProps> = ({
     }
 
     return () => { isActive = false; };
-  }, [isOpen, currentScene, currentBeatIndex, currentBeats]);
+  }, [isOpen, currentScene, currentBeatIndex, currentBeats, isTransitioning]);
+
+  // Function to handle story advancement (separated from word clicks)
+  const handleStoryAdvance = () => {
+    const cleanupAudioState = () => {
+      // Stop any playing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      
+      // Release semaphore
+      console.log('🔓 [MANUAL ADVANCE] Releasing semaphore - was:', speechGenerationSemaphore.current);
+      speechGenerationSemaphore.current = true;
+      
+      // Clear processing flags
+      currentlyProcessingLine.current = null;
+      isProcessingBeat.current = false;
+      
+      // Reset UI state
+      setIsAudioLoading(false);
+      setAudioError(null);
+      
+      console.log('🧹 [MANUAL ADVANCE] Audio state cleanup complete');
+    };
+    
+    // Clean up if audio is currently playing/loading
+    if (isAudioLoading || (audioRef.current && !audioRef.current.paused)) {
+      cleanupAudioState();
+    }
+    
+    // Prevent advance during audio loading in non-beat mode (original logic)
+    if (isAudioLoading && !inBeatMode) {
+      cleanupAudioState(); // Clean up and allow advance
+    }
+
+    if (inBeatMode) {
+      if (currentBeatIndex < currentBeats.length - 1) {
+        // Smooth transition - only set transitioning briefly for beat changes
+        setIsTransitioning(true);
+        setTimeout(() => {
+          setCurrentBeatIndex(prev => prev + 1);
+          setIsTransitioning(false);
+        }, 150);
+      } else if (choices.length === 1) {
+        // Clean up audio before transitioning to prevent double playback
+        cleanupAudioState();
+        setIsTransitioning(true);
+        handleChoiceClick(choices[0]);
+      } else {
+        // Clean up audio before showing choices to prevent double playback
+        cleanupAudioState();
+        setShowChoices(true);
+      }
+    } else {
+      // If not on last line, advance to next line
+      if (currentLineIndex < parsedLines.length - 1) {
+        // Smooth transition for line changes
+        setIsTransitioning(true);
+        setTimeout(() => {
+          setCurrentLineIndex(prev => prev + 1);
+          setIsTransitioning(false);
+        }, 150);
+      }
+      // If on last line with single choice, go to next scene
+      else if (choices.length === 1) {
+        // Clean up audio before transitioning to prevent double playback
+        cleanupAudioState();
+        setIsTransitioning(true);
+        handleChoiceClick(choices[0]);
+      }
+      // If on last line with multiple choices, show choices
+      else if (choices.length > 1 && !showChoices) {
+        // Clean up audio before showing choices to prevent double playback
+        cleanupAudioState();
+        setShowChoices(true);
+      }
+    }
+  };
 
   // New useEffect to process current beat parts when in beat mode
   useEffect(() => {
@@ -599,6 +829,11 @@ const PlayModal: React.FC<PlayModalProps> = ({
     console.log(`🎭 Processing beat ${currentBeatIndex + 1}/${currentBeats.length}:`, currentBeat.text.substring(0, 50) + '...');
     console.log('🔒 [BEAT] Setting beat processing flag to true');
     isProcessingBeat.current = true;
+    
+    // Clear transitioning state when we start processing new content
+    if (isTransitioning) {
+      setIsTransitioning(false);
+    }
 
     let beatParts: BeatPart[];
     
@@ -671,6 +906,9 @@ const PlayModal: React.FC<PlayModalProps> = ({
     console.log('🔄 [RESET] First line preview:', beatLines[0]?.text?.substring(0, 50) + '...');
     setCurrentLineIndex(0); // Reset to first part of this beat
     
+    // Clear transitioning state when content is ready
+    setIsTransitioning(false);
+    
   }, [isOpen, currentScene, currentBeats, currentBeatIndex, narratorVoiceAssignments, currentLanguage]);
 
   useEffect(() => {
@@ -732,44 +970,71 @@ const PlayModal: React.FC<PlayModalProps> = ({
         }
         
         // Check for cached audio first (from ZIP backup)
-        const currentScene = getTranslatedScene(story.scenes.find(s => s.id === story.currentSceneId) || story.scenes[0]);
-        const currentBeat = currentScene.beats?.[currentBeatIndex];
-        const audioId = `audio_${currentScene.id}_${currentBeat?.id || 'unknown'}_${currentLanguage}`;
+        if (!currentScene) {
+          console.log('❌ [AUDIO SEARCH] No current scene available');
+          throw new Error('No current scene available');
+        }
+        
+        const translatedScene = getTranslatedScene(currentScene);
+        const currentBeat = translatedScene.beats?.[currentBeatIndex];
+        const audioId = `audio_${translatedScene.id}_${currentBeat?.id || 'unknown'}_${currentLanguage}`;
         const speaker = line.speaker || 'Narrator';
         
-        // Look for cached audio in localStorage
-        console.log('🔍 [DEBUG] Searching for cached audio with pattern:', audioId);
-        console.log('🔍 [DEBUG] Speaker:', speaker);
-        console.log('🔍 [DEBUG] Current localStorage keys:');
+        // Enhanced debugging for audio search
+        console.log('🔍 [AUDIO SEARCH] Starting cached audio search...');
+        console.log('🔍 [AUDIO SEARCH] Current scene ID:', translatedScene.id);
+        console.log('🔍 [AUDIO SEARCH] Current beat ID:', currentBeat?.id);
+        console.log('🔍 [AUDIO SEARCH] Current beat index:', currentBeatIndex);
+        console.log('🔍 [AUDIO SEARCH] Current language:', currentLanguage);
+        console.log('🔍 [AUDIO SEARCH] Speaker:', speaker);
+        console.log('🔍 [AUDIO SEARCH] Expected audio pattern:', audioId);
         
         // List all localStorage keys for debugging
         const allKeys = [];
+        const audioKeys = [];
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
-          if (key && key.startsWith('audio_')) {
+          if (key) {
             allKeys.push(key);
+            if (key.startsWith('audio_')) {
+              audioKeys.push(key);
+            }
           }
         }
-        console.log('🔍 [DEBUG] Audio keys in localStorage:', allKeys);
+        console.log('🔍 [AUDIO SEARCH] Total localStorage keys:', allKeys.length);
+        console.log('🔍 [AUDIO SEARCH] Audio keys found:', audioKeys.length);
+        console.log('🔍 [AUDIO SEARCH] All audio keys:', audioKeys);
         
         let cachedAudioUrl = null;
         
-        // PRIMARY SEARCH: Try exact scene ID match
+        // PRIMARY SEARCH: Try exact scene ID match with speaker suffix
+        // Audio keys format: audio_sceneId_beatId_language_speaker_timestamp
+        const expectedPattern = `${audioId}_${speaker}`;
+        console.log('🎯 [PRIMARY SEARCH] Looking for pattern with speaker:', expectedPattern);
+        
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
-          if (key && key.startsWith(audioId) && key.includes(speaker)) {
-            const audioData = localStorage.getItem(key);
-            if (audioData) {
-              cachedAudioUrl = audioData;
-              console.log('💾 [ZIP AUDIO] Found cached audio from backup (exact match):', key);
-              break;
+          if (key && key.startsWith('audio_')) {
+            const startsWithPattern = key.startsWith(expectedPattern);
+            
+            console.log(`🔍 [PRIMARY] Checking key: ${key}`);
+            console.log(`🔍 [PRIMARY] - Starts with pattern (${expectedPattern}): ${startsWithPattern}`);
+            
+            if (startsWithPattern) {
+              const audioData = localStorage.getItem(key);
+              if (audioData) {
+                cachedAudioUrl = audioData;
+                console.log('💾 [ZIP AUDIO] Found cached audio from backup (exact match):', key);
+                console.log('💾 [ZIP AUDIO] Audio data length:', audioData.length);
+                break;
+              }
             }
           }
         }
         
         // FALLBACK SEARCH: Try position-based matching if exact match fails
         if (!cachedAudioUrl) {
-          console.log('🔍 [FALLBACK] Searching by scene/beat position...');
+          console.log('🔍 [FALLBACK] Primary search failed, trying position-based matching...');
           
           // Get current scene and beat indices
           const currentSceneIndex = story.scenes.findIndex(s => s.id === story.currentSceneId);
@@ -777,23 +1042,37 @@ const PlayModal: React.FC<PlayModalProps> = ({
           const beatIndex = currentBeatIndex;
           
           console.log(`🔍 [POSITION] Looking for Scene ${currentSceneIndex + 1}, Beat ${beatIndex + 1}`);
+          console.log(`🔍 [POSITION] Current beat ID: ${currentBeat?.id}`);
           
           // Search for any audio that matches this position pattern
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && key.startsWith('audio_') && key.includes(speaker) && key.includes(currentLanguage)) {
-              // Extract beat ID from key to match position
-              const beatIdMatch = key.match(/_beat_([^_]+)_/);
-              if (beatIdMatch) {
-                const keyBeatId = beatIdMatch[1];
-                // Check if this beat ID matches our current beat position
-                if (currentBeat?.id === keyBeatId || 
-                    (sceneToUse.beats && sceneToUse.beats[beatIndex]?.id === keyBeatId)) {
-                  const audioData = localStorage.getItem(key);
-                  if (audioData) {
-                    cachedAudioUrl = audioData;
-                    console.log(`🎯 [POSITION MATCH] Found audio by position - Scene ${currentSceneIndex + 1}, Beat ${beatIndex + 1}:`, key);
-                    break;
+            if (key && key.startsWith('audio_')) {
+              const includesSpeaker = key.includes(`_${speaker}_`);
+              const includesLanguage = key.includes(`_${currentLanguage}_`);
+              
+              console.log(`🔍 [POSITION] Checking key: ${key}`);
+              console.log(`🔍 [POSITION] - Includes speaker (${speaker}): ${includesSpeaker}`);
+              console.log(`🔍 [POSITION] - Includes language (${currentLanguage}): ${includesLanguage}`);
+              
+              if (includesSpeaker && includesLanguage) {
+                // Extract beat ID from key to match position
+                const beatIdMatch = key.match(/_beat_([^_]+)_/);
+                if (beatIdMatch) {
+                  const keyBeatId = beatIdMatch[1];
+                  console.log(`🔍 [POSITION] - Beat ID in key: ${keyBeatId}`);
+                  console.log(`🔍 [POSITION] - Current beat ID: ${currentBeat?.id}`);
+                  
+                  // Check if this beat ID matches our current beat position
+                  if (currentBeat?.id === keyBeatId || 
+                      (sceneToUse.beats && sceneToUse.beats[beatIndex]?.id === keyBeatId)) {
+                    const audioData = localStorage.getItem(key);
+                    if (audioData) {
+                      cachedAudioUrl = audioData;
+                      console.log(`🎯 [POSITION MATCH] Found audio by position - Scene ${currentSceneIndex + 1}, Beat ${beatIndex + 1}:`, key);
+                      console.log(`🎯 [POSITION MATCH] Audio data length:`, audioData.length);
+                      break;
+                    }
                   }
                 }
               }
@@ -809,8 +1088,8 @@ const PlayModal: React.FC<PlayModalProps> = ({
             const key = localStorage.key(i);
             if (key && key.startsWith('audio_') && 
                 key.includes(currentBeat.id) && 
-                key.includes(speaker) && 
-                key.includes(currentLanguage)) {
+                key.includes(`_${speaker}_`) && 
+                key.includes(`_${currentLanguage}_`)) {
               const audioData = localStorage.getItem(key);
               if (audioData) {
                 cachedAudioUrl = audioData;
@@ -861,16 +1140,9 @@ const PlayModal: React.FC<PlayModalProps> = ({
           
           if (audioRef.current) {
             console.log('🎵 Audio ready for playback, source:', audioSource);
+            
+            // Set audio source
             audioRef.current.src = audioUrl;
-            audioRef.current.oncanplaythrough = () => {
-              if (isActive) {
-                console.log('🎵 Audio ready to play, starting playback...');
-                audioRef.current?.play().catch(e => {
-                  console.error('❌ Audio playback failed:', e);
-                  if (isActive) setAudioError(`Audio playback failed: ${e.message}`);
-                });
-              }
-            };
             
             // Add event listeners for play/pause state
             audioRef.current.onplay = () => {
@@ -894,6 +1166,28 @@ const PlayModal: React.FC<PlayModalProps> = ({
                 console.error('❌ Audio element error');
                 if (isActive) setAudioError("Error playing audio file.");
             };
+            
+            // Try to play immediately when enough data is available (faster than canplaythrough)
+            audioRef.current.oncanplay = () => {
+              if (isActive && audioRef.current) {
+                console.log('🎵 Audio can start playing, attempting playback...');
+                audioRef.current.play().catch(e => {
+                  console.error('❌ Audio playback failed:', e);
+                  if (isActive) setAudioError(`Audio playback failed: ${e.message}`);
+                });
+              }
+            };
+            
+            // Fallback: if canplay doesn't fire, use canplaythrough
+            audioRef.current.oncanplaythrough = () => {
+              if (isActive && audioRef.current && audioRef.current.paused) {
+                console.log('🎵 Audio fully loaded, starting playback as fallback...');
+                audioRef.current.play().catch(e => {
+                  console.error('❌ Audio playback failed:', e);
+                  if (isActive) setAudioError(`Audio playback failed: ${e.message}`);
+                });
+              }
+            };
           }
         }
       } catch (error: any) {
@@ -902,6 +1196,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
         }
       } finally {
         if (isActive) {
+          // Set loading to false immediately to show text without waiting for audio
           setIsAudioLoading(false);
         }
         speechGenerationSemaphore.current = true;
@@ -942,20 +1237,8 @@ const PlayModal: React.FC<PlayModalProps> = ({
       elevenLabsApiKey: elevenLabsApiKey ? 'SET' : 'NOT SET'
     });
     
-    // Load scene's generated image if available (only for non-beat mode)
-    if (!inBeatMode && currentScene?.generatedImageId) {
-      getImageFromStorage(currentScene.generatedImageId).then((imageUrl) => {
-        if (imageUrl) {
-          setCurrentImageUrl(imageUrl || undefined);
-        } else {
-          setCurrentImageUrl(undefined);
-        }
-      }).catch(() => {
-        setCurrentImageUrl(undefined);
-      });
-    } else if (!inBeatMode) {
-      setCurrentImageUrl(undefined);
-    }
+    // Image/video loading is handled by the dedicated media useEffect above
+    // Removed duplicate image loading logic to prevent conflicts
 
     // Only trigger audio if this is the current line and not already being processed
     const lineId = `${currentBeatIndex}-${lineIndex}-${line?.text?.substring(0, 20)}`;
@@ -1017,7 +1300,15 @@ const PlayModal: React.FC<PlayModalProps> = ({
   }, [currentLineIndex, currentBeatIndex, parsedLines, currentBeats, isOpen, elevenLabsApiKey, currentScene]);
 
   useEffect(() => {
+    // Only auto-show choices if we're at the end and not already showing them
+    // This prevents audio from playing when choices appear
     if (parsedLines.length > 0 && currentLineIndex >= parsedLines.length && !showChoices && choices.length > 1) {
+      // Clean up any playing audio before showing choices
+      if (audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause();
+      }
+      speechGenerationSemaphore.current = true;
+      setIsAudioLoading(false);
       setShowChoices(true);
     }
   }, [currentLineIndex, parsedLines.length, showChoices, choices.length]);
@@ -1168,6 +1459,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
       <div className="absolute inset-0 bg-gradient-to-b from-slate-900 to-slate-800">
         
         {/* Scene Media Display - Full Screen Background (Video takes priority over Image) */}
+        {/* Keep showing media even during transitions for smoother experience */}
         {currentVideoUrl ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <video 
@@ -1176,8 +1468,25 @@ const PlayModal: React.FC<PlayModalProps> = ({
               autoPlay
               loop
               muted
-              onLoadedData={() => console.log('Video loaded successfully:', currentVideoUrl)}
-              onError={(e) => console.error('Video failed to load:', currentVideoUrl, e)}
+              onLoadStart={() => console.log('🎥 [VIDEO ELEMENT] Video load started:', currentVideoUrl.substring(0, 50) + '...')}
+              onLoadedMetadata={() => console.log('🎥 [VIDEO ELEMENT] Video metadata loaded')}
+              onLoadedData={() => console.log('🎥 [VIDEO ELEMENT] Video data loaded successfully')}
+              onCanPlay={() => console.log('🎥 [VIDEO ELEMENT] Video can start playing')}
+              onPlay={() => console.log('🎥 [VIDEO ELEMENT] Video started playing')}
+              onError={(e) => {
+                console.error('🎥 [VIDEO ELEMENT] Video failed to load:', {
+                  url: currentVideoUrl.substring(0, 50) + '...',
+                  error: e,
+                  target: e.target
+                });
+                // Log more details about the video element
+                const video = e.target as HTMLVideoElement;
+                console.error('🎥 [VIDEO ELEMENT] Video error details:', {
+                  networkState: video.networkState,
+                  readyState: video.readyState,
+                  error: video.error
+                });
+              }}
             />
             {/* Gradient overlay for text readability */}
             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent"></div>
@@ -1196,126 +1505,21 @@ const PlayModal: React.FC<PlayModalProps> = ({
           </div>
         )}
 
-        {/* Top UI Bar */}
-        <div className="absolute top-0 left-0 right-0 z-20 flex justify-between items-center p-4 bg-black/30 backdrop-blur-sm">
-          <div className="flex items-center gap-4">
-            <h2 className="text-xl font-bold text-white truncate pr-4" title={currentScene?.title}>
-              {currentScene?.title}
-            </h2>
-            {/* Audio Source Indicator */}
-            {audioSource && (
-              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
-                audioSource === 'zip' 
-                  ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
-                  : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-              }`}>
-                {audioSource === 'zip' ? (
-                  <>
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-                    </svg>
-                    ZIP Backup
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M2 5a2 2 0 012-2h8a2 2 0 012 2v10a2 2 0 002 2H4a2 2 0 01-2-2V5zm3 1h6v4H5V6zm6 6H5v2h6v-2z" clipRule="evenodd" />
-                      <path d="M15 7h1a2 2 0 012 2v5.5a1.5 1.5 0 01-3 0V9a1 1 0 00-1-1h-1v4.5a1.5 1.5 0 01-3 0V8a1 1 0 011-1z" />
-                    </svg>
-                    API Streaming
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className="text-white/80 hover:text-white text-2xl p-2 rounded-full bg-black/30 hover:bg-black/50 transition-all"
-            aria-label="Close play mode"
-          >
-            ×
-          </button>
-        </div>
+        {/* Small Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute top-2 right-2 z-20 text-white/60 hover:text-white text-lg w-8 h-8 flex items-center justify-center rounded-full bg-black/20 hover:bg-black/40 transition-all"
+          aria-label="Close play mode"
+        >
+          ×
+        </button>
 
         {/* Main Content Area - Bottom Overlay */}
-        <div className="absolute bottom-0 left-0 right-0 z-10">
+        <div className="absolute bottom-0 left-0 right-0 z-10 pb-4">
           
           {/* Text Display Area */}
           {currentScene && ((inBeatMode && currentBeatData) || (!inBeatMode && currentLineData)) && (
-            <div 
-              className="bg-black/85 backdrop-blur-sm p-6 mx-4 mb-4 rounded-lg border border-white/20 cursor-pointer hover:bg-black/90 transition-colors"
-              onClick={() => {
-                // Clean up audio state if user manually advances during playback
-                const cleanupAudioState = () => {
-                  console.log('🧹 [MANUAL ADVANCE] Cleaning up audio state due to manual advance');
-                  
-                  // Stop current audio if playing
-                  if (audioRef.current && !audioRef.current.paused) {
-                    audioRef.current.pause();
-                    audioRef.current.currentTime = 0;
-                  }
-                  
-                  // Clean up blob URL
-                  if (currentAudioBlobUrlRef.current) {
-                    URL.revokeObjectURL(currentAudioBlobUrlRef.current);
-                    currentAudioBlobUrlRef.current = null;
-                  }
-                  
-                  // Reset audio element
-                  if (audioRef.current) {
-                    audioRef.current.removeAttribute('src');
-                    audioRef.current.load();
-                  }
-                  
-                  // Release semaphore
-                  console.log('🔓 [MANUAL ADVANCE] Releasing semaphore - was:', speechGenerationSemaphore.current);
-                  speechGenerationSemaphore.current = true;
-                  
-                  // Clear processing flags
-                  currentlyProcessingLine.current = null;
-                  isProcessingBeat.current = false;
-                  
-                  // Reset UI state
-                  setIsAudioLoading(false);
-                  setAudioError(null);
-                  
-                  console.log('🧹 [MANUAL ADVANCE] Audio state cleanup complete');
-                };
-                
-                // Clean up if audio is currently playing/loading
-                if (isAudioLoading || (audioRef.current && !audioRef.current.paused)) {
-                  cleanupAudioState();
-                }
-                
-                // Prevent advance during audio loading in non-beat mode (original logic)
-                if (isAudioLoading && !inBeatMode) {
-                  cleanupAudioState(); // Clean up and allow advance
-                }
-
-                if (inBeatMode) {
-                  if (currentBeatIndex < currentBeats.length - 1) {
-                    setCurrentBeatIndex(prev => prev + 1);
-                  } else if (choices.length === 1) {
-                    handleChoiceClick(choices[0]);
-                  } else {
-                    setShowChoices(true);
-                  }
-                } else {
-                  // If not on last line, advance to next line
-                  if (currentLineIndex < parsedLines.length - 1) {
-                    setCurrentLineIndex(prev => prev + 1);
-                  }
-                  // If on last line with single choice, go to next scene
-                  else if (choices.length === 1) {
-                    handleChoiceClick(choices[0]);
-                  }
-                  // If on last line with multiple choices, show choices
-                  else if (choices.length > 1 && !showChoices) {
-                    setShowChoices(true);
-                  }
-                }
-              }}
-            >
+            <div className={`bg-black/85 backdrop-blur-sm p-4 sm:p-6 mx-2 sm:mx-4 mb-4 rounded-lg border border-white/20 max-w-full overflow-hidden transition-opacity duration-150 ${isTransitioning ? 'opacity-50' : 'opacity-100'}`}>
               {/* Scene/Beat Text with Word-Level Highlighting */}
               <div className="mb-4">
                 {inBeatMode ? (
@@ -1351,25 +1555,25 @@ const PlayModal: React.FC<PlayModalProps> = ({
                 </div>
               )}
 
-              {/* Audio Status */}
-              {(isAudioLoading || audioError) && (
-                (!inBeatMode && currentLineData?.isSpokenLine) || 
-                (inBeatMode && parsedLines[currentBeatIndex]?.isSpokenLine)
-              ) && (
-                <div className={`mt-3 p-2 text-sm rounded ${audioError ? 'bg-red-600/80' : 'bg-sky-600/80'} text-white`}>
-                  {isAudioLoading && "🔊 Playing audio..."}
-                  {audioError && `⚠️ ${audioError}`}
-                  {isAudioLoading && !audioError && elevenLabsApiKey && (
-                    <button onClick={handleSkipAudio} className="ml-2 underline text-sm">
-                      Skip
-                    </button>
-                  )}
+              {/* Play Button - Inside Dialog Box */}
+              {!showChoices && (
+                <div className="flex justify-end mt-4">
+                  <button
+                    onClick={handleStoryAdvance}
+                    className="px-4 py-2 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 border border-white/30 hover:border-white/50"
+                    title="Continue story"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <span className="text-sm">Continue</span>
+                  </button>
                 </div>
               )}
             </div>
           )}
 
-          {/* Multiple choices - show only when explicitly shown */}
+          {/* Multiple choices - show with text still visible */}
           {choices.length > 1 && showChoices && (
             <div className="bg-black/85 backdrop-blur-sm p-6 mx-4 mb-4 rounded-lg border border-white/20">
               <div className="space-y-3">
@@ -1379,7 +1583,7 @@ const PlayModal: React.FC<PlayModalProps> = ({
                     onClick={() => handleChoiceClick(choice)}
                     className="w-full text-left px-4 py-3 rounded-lg bg-slate-700/80 hover:bg-sky-600/80 text-white font-medium transition-all duration-200 transform hover:scale-[1.02] border border-white/20 hover:border-sky-400/50"
                   >
-                    {choice.label || "Continue..."}
+                    {getTranslatedConnection(choice) || "Continue..."}
                   </button>
                 ))}
               </div>
@@ -1394,6 +1598,8 @@ const PlayModal: React.FC<PlayModalProps> = ({
           )}
 
         </div>
+
+
 
       </div>
       
