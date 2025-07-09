@@ -317,6 +317,7 @@ const WordHighlightText: React.FC<WordHighlightTextProps> = ({
         word={tooltipWord}
         isVisible={tooltipVisible}
         onClose={() => setTooltipVisible(false)}
+        sentenceContext={text} // Pass full sentence for better translation context
       />
     </div>
   );

@@ -19,9 +19,9 @@ interface TranslationResult {
 }
 
 /**
- * Translate a word using Deepseek API
+ * Translate a word using Deepseek API with sentence context
  */
-export async function translateWord(word: string): Promise<TranslationResult> {
+export async function translateWord(word: string, sentenceContext?: string): Promise<TranslationResult> {
   const apiKey = import.meta.env.VITE_DEEPSEEK_API_KEY;
   
   if (!apiKey || apiKey === 'your_deepseek_api_key_here') {
@@ -33,25 +33,42 @@ export async function translateWord(word: string): Promise<TranslationResult> {
   }
 
   try {
-    const prompt = `Provide me with the following meaning of the following word: ${word}
+    const prompt = sentenceContext 
+      ? `Nesta frase: "${sentenceContext}"
 
-- Translation into Portuguese
-- Lemma
-- Grammar class
+Qual é o significado da palavra "${word}"?
 
-Reply format should be:
+Por favor forneça:
+- Tradução para português (considerando o contexto da frase)
+- Lemma (forma base da palavra)
+- Tipo/classe gramatical
 
-Original word
-- Translation (this should be in Portuguese):
-- Lemma:
-- Grammar class:
+Formato da resposta:
 
-Example:
+Palavra original
+- Tradução: [tradução em português considerando o contexto]
+- Lemma: [forma base da palavra]
+- Tipo: [classe gramatical]
 
-Dog
-- Translation: Cão, cachorro
-- Lemma: Dog
-- Grammar class: Substantivo`;
+Exemplo:
+
+house (na frase "I live in a house")
+- Tradução: casa
+- Lemma: house
+- Tipo: substantivo`
+      : `Qual é o significado da palavra "${word}"?
+
+Por favor forneça:
+- Tradução para português
+- Lemma (forma base da palavra)
+- Tipo/classe gramatical
+
+Formato da resposta:
+
+Palavra original
+- Tradução: [tradução em português]
+- Lemma: [forma base da palavra]
+- Tipo: [classe gramatical]`;
 
     const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
@@ -159,17 +176,20 @@ const saveCacheToStorage = () => {
 loadCacheFromStorage();
 
 /**
- * Translate word with caching
+ * Translate word with caching (includes sentence context)
  */
-export async function translateWordCached(word: string): Promise<TranslationResult> {
+export async function translateWordCached(word: string, sentenceContext?: string): Promise<TranslationResult> {
+  // Create cache key that includes context for more accurate caching
+  const cacheKey = sentenceContext ? `${word}|${sentenceContext}` : word;
+  
   // Check cache first
-  if (translationCache.has(word)) {
-    return translationCache.get(word)!;
+  if (translationCache.has(cacheKey)) {
+    return translationCache.get(cacheKey)!;
   }
   
   // Translate and cache result
-  const result = await translateWord(word);
-  translationCache.set(word, result);
+  const result = await translateWord(word, sentenceContext);
+  translationCache.set(cacheKey, result);
   
   // Save to localStorage for persistence
   saveCacheToStorage();

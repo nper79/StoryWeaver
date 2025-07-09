@@ -6,9 +6,10 @@ interface WordTooltipProps {
   word: string;
   isVisible: boolean;
   onClose: () => void;
+  sentenceContext?: string; // Full sentence for better translation context
 }
 
-export const WordTooltip: React.FC<WordTooltipProps> = ({ word, isVisible, onClose }) => {
+export const WordTooltip: React.FC<WordTooltipProps> = ({ word, isVisible, onClose, sentenceContext }) => {
   const [translation, setTranslation] = useState<string>('');
   const [lemma, setLemma] = useState<string>('');
   const [grammarClass, setGrammarClass] = useState<string>('');
@@ -69,7 +70,7 @@ export const WordTooltip: React.FC<WordTooltipProps> = ({ word, isVisible, onClo
     setError('');
     
     try {
-      const result = await translateWordCached(word.toLowerCase());
+      const result = await translateWordCached(word.toLowerCase(), sentenceContext);
       
       if (result.error) {
         setError(result.error);

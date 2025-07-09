@@ -51,9 +51,9 @@ const saveCacheToStorage = () => {
 loadCacheFromStorage();
 
 /**
- * Translate a word using Google Gemini API
+ * Translate a word using Google Gemini API with sentence context
  */
-async function translateWord(word: string): Promise<TranslationResult> {
+async function translateWord(word: string, sentenceContext?: string): Promise<TranslationResult> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   
   if (!apiKey) {
@@ -66,18 +66,45 @@ async function translateWord(word: string): Promise<TranslationResult> {
     };
   }
 
-  const prompt = `Translate the Spanish word "${word}" to English and provide the following information in this exact format:
+  const prompt = sentenceContext 
+    ? `In the sentence:
+"${sentenceContext}"
+What is the meaning of the word:
+"${word}"
 
-Translation: [English translation]
-Lemma: [base form of the original Spanish word with accents preserved]
-Grammar Class: [noun/verb/adjective/adverb/etc.]
+Please answer with focus only on the WORD, not on the whole sentence.
 
-Example:
-Translation: house
-Lemma: está
-Grammar Class: verb
+Provide:
 
-Please respond only with the requested format, no additional text.`;
+English translation of the word (based on its usage in this sentence)
+
+Lemma (dictionary form)
+
+Grammatical class (e.g. noun, verb, adjective)
+
+Do not translate or explain the whole sentence. Focus strictly on the single word.
+
+Response format:
+Translation: [word translation]
+Lemma: [base form]
+Grammar Class: [class]`
+    : `What is the meaning of the word:
+"${word}"
+
+Please provide:
+
+English translation
+
+Lemma (dictionary form)
+
+Grammatical class (e.g. noun, verb, adjective)
+
+Do not assume sentence context. Focus only on the word.
+
+Response format:
+Translation: [word translation]
+Lemma: [base form]
+Grammar Class: [class]`;
 
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`, {
@@ -151,20 +178,23 @@ Please respond only with the requested format, no additional text.`;
 }
 
 /**
- * Translate word with caching
+ * Translate word with caching (includes sentence context)
  */
-export async function translateWordCached(word: string): Promise<TranslationResult> {
+export async function translateWordCached(word: string, sentenceContext?: string): Promise<TranslationResult> {
+  // Create cache key that includes context for more accurate caching
+  const cacheKey = sentenceContext ? `${word}|${sentenceContext}` : word;
+  
   // Check cache first
-  if (translationCache.has(word)) {
-    console.log('💾 [Cache] Found cached translation for:', word);
-    return translationCache.get(word)!;
+  if (translationCache.has(cacheKey)) {
+    console.log('💾 [Cache] Found cached translation for:', word, sentenceContext ? 'with context' : 'without context');
+    return translationCache.get(cacheKey)!;
   }
   
-  console.log('🔍 [Gemini] Translating word:', word);
+  console.log('🔍 [Gemini] Translating word:', word, sentenceContext ? 'with context' : 'without context');
   
   // Translate and cache result
-  const result = await translateWord(word);
-  translationCache.set(word, result);
+  const result = await translateWord(word, sentenceContext);
+  translationCache.set(cacheKey, result);
   
   // Save to localStorage for persistence
   saveCacheToStorage();
