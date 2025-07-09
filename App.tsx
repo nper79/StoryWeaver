@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Scene, Connection, StoryData, VoiceAssignment, Translation, NarratorVoiceAssignments, ConnectionTranslation } from './types';
 import Toolbar from './components/Toolbar';
 import CanvasView from './components/CanvasView';
@@ -66,6 +66,8 @@ const App: React.FC = () => {
   const [translations, setTranslations] = useState<Translation[]>([]);
   const [connectionTranslations, setConnectionTranslations] = useState<ConnectionTranslation[]>([]);
   const [currentLanguage, setCurrentLanguage] = useState<string>('en');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState<boolean>(false);
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null);
   const [openaiApiKey, setOpenaiApiKey] = useState<string | null>(null);
@@ -79,6 +81,84 @@ const App: React.FC = () => {
   const [rewritingTextForScene, setRewritingTextForScene] = useState<string | null>(null);
   const [subdividingSceneIntoBeats, setSubdividingSceneIntoBeats] = useState<string | null>(null);
   const [generatingBeatImageFor, setGeneratingBeatImageFor] = useState<{ sceneId: string; beatId: string } | null>(null);
+
+  // Auto-save timer ref
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Auto-save function to localStorage
+  const autoSaveToLocalStorage = useCallback(async () => {
+    setIsAutoSaving(true);
+    try {
+      const storyData: StoryData = {
+        scenes,
+        connections,
+        startSceneId,
+        voiceAssignments,
+        translations,
+        connectionTranslations,
+        currentLanguage,
+        narratorVoiceId: narratorVoiceId || undefined,
+        narratorVoiceAssignments
+      };
+      
+      // Add small delay to show the saving indicator
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      localStorage.setItem(STORY_DATA_LOCAL_STORAGE_KEY, JSON.stringify(storyData));
+      setHasUnsavedChanges(false);
+      console.log('🔄 [AUTO-SAVE] Story automatically saved to localStorage');
+    } catch (error) {
+      console.error('❌ [AUTO-SAVE] Failed to auto-save story:', error);
+    } finally {
+      setIsAutoSaving(false);
+    }
+  }, [scenes, connections, startSceneId, voiceAssignments, translations, connectionTranslations, currentLanguage, narratorVoiceId, narratorVoiceAssignments]);
+
+  // Debounced auto-save function
+  const scheduleAutoSave = useCallback(() => {
+    setHasUnsavedChanges(true);
+    
+    // Clear existing timer
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    
+    // Schedule new auto-save after 2 seconds of inactivity
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveToLocalStorage();
+    }, 2000);
+  }, [autoSaveToLocalStorage]);
+
+  // Prevent accidental page refresh/close when there are unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = 'Você tem alterações não salvas. Tem certeza que deseja sair?';
+        return 'Você tem alterações não salvas. Tem certeza que deseja sair?';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  // Auto-save when data changes
+  useEffect(() => {
+    // Skip auto-save on initial load
+    if (scenes.length === 0 && connections.length === 0) return;
+    
+    scheduleAutoSave();
+  }, [scenes, connections, voiceAssignments, translations, connectionTranslations, currentLanguage, narratorVoiceId, narratorVoiceAssignments, scheduleAutoSave]);
+
+  // Cleanup auto-save timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, []);
 
   const loadInitialData = () => {
     const savedStory = localStorage.getItem(STORY_DATA_LOCAL_STORAGE_KEY);
@@ -386,11 +466,40 @@ const App: React.FC = () => {
   };
 
   const updateConnectionLabel = (connectionId: string, newLabel: string) => {
-    setConnections(prevConnections =>
-      prevConnections.map(conn =>
-        conn.id === connectionId ? { ...conn, label: newLabel } : conn
-      )
-    );
+    if (currentLanguage === 'en') {
+      // If editing in English, update the original connection label
+      setConnections(prevConnections =>
+        prevConnections.map(conn =>
+          conn.id === connectionId ? { ...conn, label: newLabel } : conn
+        )
+      );
+    } else {
+      // If editing in another language, create/update connection translation
+      setConnectionTranslations(prevTranslations => {
+        const existingTranslationIndex = prevTranslations.findIndex(
+          ct => ct.connectionId === connectionId && ct.language === currentLanguage
+        );
+        
+        if (existingTranslationIndex >= 0) {
+          // Update existing translation
+          const updatedTranslations = [...prevTranslations];
+          updatedTranslations[existingTranslationIndex] = {
+            ...updatedTranslations[existingTranslationIndex],
+            label: newLabel
+          };
+          return updatedTranslations;
+        } else {
+          // Create new translation
+          const newTranslation: ConnectionTranslation = {
+            id: `conn_translation_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            language: currentLanguage,
+            connectionId: connectionId,
+            label: newLabel
+          };
+          return [...prevTranslations, newTranslation];
+        }
+      });
+    }
   };
 
   const deleteConnection = (id: string) => {
@@ -2380,6 +2489,8 @@ const App: React.FC = () => {
           currentLanguage={currentLanguage}
           translations={translations}
           onLanguageChange={setCurrentLanguage}
+          hasUnsavedChanges={hasUnsavedChanges}
+          isAutoSaving={isAutoSaving}
         />
         <div className="flex-1 relative overflow-hidden">
           <CanvasView
@@ -2389,6 +2500,7 @@ const App: React.FC = () => {
             onAddConnection={addConnection}
             onDeleteConnection={deleteConnection}
             onAddInlineChoice={handleAddInlineChoice}
+            onUpdateConnectionLabel={updateConnectionLabel}
             setActiveSceneId={setActiveSceneId}
             activeSceneId={activeSceneId}
             zoomLevel={zoomLevel}
